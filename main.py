@@ -159,26 +159,24 @@ Formato de saída OBRIGATÓRIO (JSON puro):
         "next_actions": (data.get("next_actions") or "").strip(),
     }
 
-def run_once(run_id: str) -> Dict[str, Any]:
-    cycle_number = get_next_cycle_number(AGENT_NAME)
-    recent = fetch_recent_cycles(AGENT_NAME, limit=MEMORY_WINDOW)
-    memory_summary = summarize_memory(recent)
-
-    ai = llm_reflect_and_act(memory_summary, FOCUS, cycle_number)
+def run_once(run_id: str):
+    task_prompt = os.getenv("TASK_PROMPT", "").strip()
+    if not task_prompt:
+        # fallback seguro (ou pode levantar erro)
+        task_prompt = "Auto-aprimoramento interno (default)"
 
     row = {
-        "created_at": datetime.now(timezone.utc).isoformat(),
         "agent_name": AGENT_NAME,
         "run_id": run_id,
-        "cycle_number": cycle_number,
+        "cycle_number": next_cycle_number(run_id),
         "focus": FOCUS,
-        "output": ai["output"],
-        "reflection": ai["reflection"],
-        "next_actions": ai["next_actions"],
+        "task_prompt": task_prompt,   # <<< AQUI
+        "output": output,
+        "reflection": reflection,
+        "next_actions": next_actions,
     }
 
-    saved = write_cycle(row)
-    return saved
+    return write_cycle(row)
 
 # -----------------------------
 # Main
