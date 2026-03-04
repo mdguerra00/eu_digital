@@ -41,6 +41,6 @@ task = Task(
     expected_output='Relatório formatado com apresentação, plano e próximos passos'
 )
 
-crew = Crew(agents=[eu_negocios], tasks=[task], verbose=2)
+crew = Crew(agents=[eu_negocios], tasks=[task], verbose=True)
 result = crew.kickoff()
 print(result)
