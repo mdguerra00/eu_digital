@@ -44,3 +44,10 @@ task = Task(
 crew = Crew(agents=[eu_negocios], tasks=[task], verbose=True)
 result = crew.kickoff()
 print(result)
+
+import time
+
+while True:
+    result = crew.kickoff()
+    print("Ciclo concluído:", result)
+    time.sleep(3600)  # 1 hora
