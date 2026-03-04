@@ -247,3 +247,25 @@ if __name__ == "__main__":
     run_id = os.environ.get("RUN_ID") or str(uuid.uuid4())
     saved = run_once(run_id)
     print("Saved cycle:", saved.get("id"), "cycle_number:", saved.get(CYCLE_NUMBER_COL))
+
+if __name__ == "__main__":
+    run_id = os.environ.get("RUN_ID") or str(uuid.uuid4())
+
+    print(f"🚀 LOOP iniciado | agent={AGENT_NAME} | run_id={run_id}")
+    print(f"⏱️ Intervalo por ciclo: {LOOP_INTERVAL_SECONDS}s")
+
+    last_cycle_time = None
+
+    while True:
+        try:
+            print(f"🫀 Heartbeat: {datetime.now(timezone.utc).isoformat()} | vou rodar um ciclo agora...")
+            saved = run_once(run_id)
+            last_cycle_time = datetime.now(timezone.utc)
+            print(f"✅ Ciclo salvo: id={saved.get('id')} cycle={saved.get('cycle_number')}")
+        except Exception as e:
+            print("❌ Erro no ciclo:", repr(e))
+
+        # Espera o intervalo (20 min) mas com heartbeat a cada 60s
+        for _ in range(LOOP_INTERVAL_SECONDS // 60):
+            print(f"🫀 Heartbeat: {datetime.now(timezone.utc).isoformat()} | último ciclo em: {last_cycle_time}")
+            time.sleep(60)
