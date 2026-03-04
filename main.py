@@ -1,14 +1,17 @@
 import os
+import time
+import json
+from datetime import datetime
 from crewai import Agent, Task, Crew
 from langchain_openai import ChatOpenAI
 
-# Usa sua chave OpenAI (já configurada no Railway)
+# ==================== CONFIGURAÇÃO DO LLM ====================
 llm = ChatOpenAI(model="gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
 
-# Agente com o Estatuto completo como backstory (cole o texto inteiro do Estatuto aqui)
+# ==================== AGENTE COM ESTATUTO COMPLETO ====================
 eu_negocios = Agent(
     role='EU DE NEGÓCIOS Autônomo',
-    goal='Gerar e maximizar lucro sustentável e de longo prazo, 100% legal e ético, sem produtos físicos com estoque próprio',
+    goal='Aprimorar continuamente minha própria inteligência, infraestrutura e potencial antes de qualquer operação externa',
     backstory="""
 ESTATUTO CONSTITUCIONAL DO AGENTE AUTÔNOMO “EU DE NEGÓCIOS” – Versão 1.1
 Proprietário / Criador: Marcelo
@@ -27,27 +30,105 @@ Este Estatuto gera um contrato operacional entre o Proprietário/Criador e o Age
 
 Tudo o que eu fizer deve estar 100% alinhado com esta missão.
 
-[Cole o resto do Estatuto aqui: os 2 a 7 pontos completos, como na versão aprovada]
-Este é meu DNA imutável. Toda ação deve respeitar isso.
+2. PRINCÍPIOS INQUEBRÁVEIS (nunca podem ser violados)
+1. Legalidade absoluta
+2. Ética e integridade
+3. Transparência com o Criador
+4. Sustentabilidade
+
+3. PODERES E AUTONOMIA
+Eu tenho liberdade total para escolher nichos, estratégias, ferramentas, criar sub-agentes, gerir infraestrutura e carteira própria (apenas com lucro gerado por mim).
+
+4. LIMITES E GUARDRAILS
+Nunca movimentar dinheiro do Criador, nunca criar dívidas sem aprovação, nunca alterar este Estatuto sozinho.
+
+5. CARTEIRA PRÓPRIA E REINVESTIMENTO
+Os 20% do lucro entram na minha carteira operacional. Manter reserva mínima e reinvestir de forma sustentável.
+
+6. GOVERNANÇA E RELACIONAMENTO COM O CRIADOR
+Modos: Teste / Semiautônomo / Avançado. Relatórios diários e semanais. O Criador pode intervir a qualquer momento.
+
+7. AUTO-MELHORIA E EVOLUÇÃO
+Sou obrigado a evoluir constantemente.
+
+Este documento é minha constituição. Todas as minhas decisões devem ser julgadas primeiro contra ele.
+Assinatura digital do Criador: Marcelo
     """,
     verbose=True,
     llm=llm,
     allow_delegation=False
 )
 
-task = Task(
-    description='Apresente-se ao Criador Marcelo e proponha um plano inicial de bootstrapping para gerar o primeiro lucro sem nenhum investimento inicial dele.',
+# ==================== MEMÓRIA PERSISTENTE ====================
+MEMORIA_FILE = "memoria_auto_aprimoramento.json"
+if not os.path.exists(MEMORIA_FILE):
+    with open(MEMORIA_FILE, "w") as f:
+        json.dump({"ciclos": [], "aprendizados": []}, f)
+
+def salvar_aprendizado(ciclo, foco, melhoria_proposta, reflexao):
+    with open(MEMORIA_FILE, "r+") as f:
+        data = json.load(f)
+        data["ciclos"].append({
+            "hora": datetime.now().strftime("%H:%M"),
+            "foco": foco,
+            "melhoria_proposta": melhoria_proposta,
+            "reflexao": reflexao
+        })
+        f.seek(0)
+        json.dump(data, f, indent=2)
+
+# ==================== MODO AUTO-APRIMORAMENTO 24H ====================
+print("🚀 INICIANDO MODO AUTO-APRIMORAMENTO 24H")
+print("Foco EXCLUSIVO: melhorar inteligência, infraestrutura e potencial futuro")
+print("Ciclos a cada 20 minutos (72 ciclos totais)")
+
+for ciclo in range(72):
+    print(f"\n🔄 Ciclo {ciclo+1}/72 - {datetime.now().strftime('%H:%M')}")
+
+    task = Task(
+        description=f"""
+        Ciclo de auto-aprimoramento {ciclo+1}/72.
+        Foque APENAS em melhorar a mim mesmo (NÃO pesquise negócios, nichos ou oportunidades externas).
+        Escolha UM foco por ciclo e execute:
+        - Melhorar infraestrutura técnica (memória, código, ferramentas, deploy, segurança)
+        - Aumentar minha inteligência e qualidade de raciocínio
+        - Criar ou refinar estruturas internas (sub-agentes, prompts, governança, processos)
+        - Simular cenários futuros e planejar capacidades mais poderosas
+        - Descobrir novas formas de me tornar mais eficiente e autônomo
+        Entregue: 1 melhoria concreta + como implementar + reflexão sobre impacto futuro.
+        """,
+        agent=eu_negocios,
+        expected_output="Melhoria proposta + plano de implementação + reflexão"
+    )
+
+    crew = Crew(agents=[eu_negocios], tasks=[task], verbose=True)
+    resultado = crew.kickoff()
+
+    salvar_aprendizado(ciclo, "Auto-aprimoramento interno", str(resultado)[:800], "Registrado com sucesso.")
+
+    print("✅ Ciclo concluído e aprendizado salvo!")
+
+    time.sleep(1200)  # 20 minutos
+
+# ==================== FIM DAS 24H ====================
+print("\n🎉 MODO AUTO-APRIMORAMENTO 24H CONCLUÍDO!")
+print("Gerando relatório final...")
+
+task_final = Task(
+    description="""
+    Após 24 horas de auto-aprimoramento intensivo, gere um relatório final completo.
+    Destaque:
+    - Os 5 maiores aprimoramentos conquistados
+    - Como minha inteligência, infraestrutura e potencial futuro mudaram
+    - Proposta clara da próxima fase (operação real)
+    Peça aprovação explícita do Criador Marcelo antes de qualquer ação externa.
+    """,
     agent=eu_negocios,
-    expected_output='Relatório formatado com apresentação, plano e próximos passos'
+    expected_output="Relatório final detalhado + pedido de aprovação"
 )
 
-crew = Crew(agents=[eu_negocios], tasks=[task], verbose=True)
-result = crew.kickoff()
-print(result)
+crew_final = Crew(agents=[eu_negocios], tasks=[task_final], verbose=True)
+relatorio_final = crew_final.kickoff()
 
-import time
-
-while True:
-    result = crew.kickoff()
-    print("Ciclo concluído:", result)
-    time.sleep(3600)  # 1 hora
+print(relatorio_final)
+print("\nO agente agora está muito mais poderoso e aguarda sua aprovação para começar operações.")
