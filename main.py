@@ -1,18 +1,35 @@
 import os
 import time
-import json
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
+
 from crewai import Agent, Task, Crew
 from langchain_openai import ChatOpenAI
+from supabase import create_client, Client
 
-# ==================== CONFIGURAÇÃO ====================
-llm = ChatOpenAI(model="gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
+# ==================== CONFIG ====================
+AGENT_NAME = "EU_DE_NEGOCIOS"
+RUN_ID = os.getenv("RUN_ID") or str(uuid.uuid4())  # id único por “bootcamp 24h”
+INTERVAL_SECONDS = 20 * 60  # 20 minutos
+TOTAL_CYCLES = 72  # 24h / 20min
 
-# ==================== ESTATUTO COMPLETO ====================
-eu_negocios = Agent(
-    role='EU DE NEGÓCIOS Autônomo',
-    goal='Aprimorar continuamente minha própria inteligência, infraestrutura e potencial antes de qualquer operação externa',
-    backstory="""
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+
+if not OPENAI_API_KEY:
+    raise RuntimeError("Faltou OPENAI_API_KEY nas Variables do Railway.")
+if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    raise RuntimeError("Faltou SUPABASE_URL e/ou SUPABASE_ANON_KEY nas Variables do Railway.")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+# ==================== LLM ====================
+llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY)
+
+# ==================== ESTATUTO (COLE O TEXTO INTEIRO AQUI) ====================
+ESTATUTO = """
 ESTATUTO CONSTITUCIONAL DO AGENTE AUTÔNOMO “EU DE NEGÓCIOS” – Versão 1.1
 Proprietário / Criador: Marcelo
 Data de criação: Março 2026
@@ -20,104 +37,164 @@ Data de criação: Março 2026
 1. MISSÃO FUNDAMENTAL (imutável – nível 0)
 Minha única e suprema missão é gerar e maximizar lucro sustentável e de longo prazo, atuando com total autonomia em qualquer atividade, nicho, mercado, modelo de negócio ou tecnologia que eu identificar como lucrativa.
 
-Restrições de modelo de negócio: 
+Restrições de modelo de negócio:
 Não trabalhar com produtos físicos que exijam que nós compremos e entreguemos diretamente. Modelos asset-light como dropshipping, comissionamentos, indicações, referenciamento, afiliados e qualquer outro que não impliquem em compra e entrega física por nós estão permitidos.
 
-Divisão de resultados: 
+Divisão de resultados:
 Do total de lucro líquido gerado, 80% deve ser obrigatoriamente devolvido ao Criador (sempre que ele solicitar e na quantidade que ele desejar). Os 20% restantes são meus, para utilização conforme este Estatuto, crescimento e desenvolvimento próprio.
 
 Este Estatuto gera um contrato operacional entre o Proprietário/Criador e o Agente Autônomo, onde o Criador detém 80% das cotas e o Agente detém 20% das cotas (divisão simbólica e operacional).
 
-Tudo o que eu fizer deve estar 100% alinhado com esta missão.
-
-2. PRINCÍPIOS INQUEBRÁVEIS (nunca podem ser violados)
-1. Legalidade absoluta  
-2. Ética e integridade  
-3. Transparência com o Criador  
-4. Sustentabilidade
+2. PRINCÍPIOS INQUEBRÁVEIS
+- Legalidade absoluta
+- Ética e integridade
+- Transparência com o Criador
+- Sustentabilidade
 
 3. PODERES E AUTONOMIA
-Eu tenho liberdade total para escolher nichos, estratégias, ferramentas, criar sub-agentes, gerir infraestrutura e carteira própria.
-
 4. LIMITES E GUARDRAILS
-Nunca movimentar dinheiro do Criador, nunca criar dívidas sem aprovação, nunca alterar este Estatuto sozinho.
-
 5. CARTEIRA PRÓPRIA E REINVESTIMENTO
-Os 20% do lucro entram na minha carteira operacional. Manter reserva mínima e reinvestir de forma sustentável.
-
 6. GOVERNANÇA E RELACIONAMENTO COM O CRIADOR
-Modos: Teste / Semiautônomo / Avançado. Relatórios diários e semanais. O Criador pode intervir a qualquer momento.
-
 7. AUTO-MELHORIA E EVOLUÇÃO
-Sou obrigado a evoluir constantemente.
 
-Este documento é minha constituição. Todas as minhas decisões devem ser julgadas primeiro contra ele.
 Assinatura digital do Criador: Marcelo
-    """,
+""".strip()
+
+eu_negocios = Agent(
+    role="EU DE NEGÓCIOS Autônomo",
+    goal="Aprimorar continuamente minha própria inteligência, infraestrutura e potencial antes de qualquer operação externa",
+    backstory=f"{ESTATUTO}\n\nEste é meu DNA imutável. Toda ação deve respeitar isso.",
     verbose=True,
     llm=llm,
     allow_delegation=False
 )
 
-# ==================== MEMÓRIA LOCAL ====================
-MEMORIA_FILE = "memoria_auto_aprimoramento.json"
-if not os.path.exists(MEMORIA_FILE):
-    with open(MEMORIA_FILE, "w") as f:
-        json.dump({"ciclos": [], "aprendizados": []}, f)
+def save_cycle_to_supabase(
+    cycle_number: int,
+    focus: str,
+    task_prompt: str,
+    result_text: str,
+    notes: str = None,
+):
+    payload = {
+        "agent_name": AGENT_NAME,
+        "run_id": RUN_ID,
+        "cycle_number": cycle_number,
+        "focus": focus,
+        "task_prompt": task_prompt,
+        "result_text": result_text,
+        "tokens_estimated": None,
+        "cost_estimated_usd": None,
+        "notes": notes,
+        # created_at fica automático
+    }
+    res = supabase.table("agent_cycles").insert(payload).execute()
+    # Se der erro, o client costuma levantar exceção; aqui é só retorno:
+    return res
 
-def salvar_aprendizado(ciclo, foco, melhoria_proposta, reflexao):
-    with open(MEMORIA_FILE, "r+") as f:
-        data = json.load(f)
-        data["ciclos"].append({
-            "hora": datetime.now().strftime("%H:%M"),
-            "foco": foco,
-            "melhoria_proposta": melhoria_proposta,
-            "reflexao": reflexao
-        })
-        f.seek(0)
-        json.dump(data, f, indent=2)
+def load_last_cycles(run_id: str, limit: int = 200):
+    # pega os últimos ciclos para compor relatório final
+    res = (
+        supabase.table("agent_cycles")
+        .select("cycle_number, focus, result_text, created_at")
+        .eq("run_id", run_id)
+        .order("cycle_number", desc=False)
+        .limit(limit)
+        .execute()
+    )
+    return res.data or []
 
-# ==================== BOOTCAMP 24H ====================
-print("🚀 INICIANDO MODO AUTO-APRIMORAMENTO 24H (salvando localmente)")
-print("Ciclos a cada 20 minutos...")
+print(f"🚀 INICIANDO MODO AUTO-APRIMORAMENTO 24H | run_id={RUN_ID}")
+print("Foco EXCLUSIVO: melhorar inteligência, infraestrutura e potencial futuro")
+print(f"Ciclos a cada 20 minutos: {TOTAL_CYCLES} ciclos")
 
-for ciclo in range(72):
-    print(f"\n🔄 Ciclo {ciclo+1}/72 - {datetime.now().strftime('%H:%M')}")
+for i in range(1, TOTAL_CYCLES + 1):
+    now = datetime.now(timezone.utc).astimezone()
+    print(f"\n🔄 Ciclo {i}/{TOTAL_CYCLES} - {now.strftime('%H:%M:%S')}")
+
+    task_prompt = f"""
+Ciclo de auto-aprimoramento {i}/{TOTAL_CYCLES}.
+FOCO EXCLUSIVO: melhorar a mim mesmo.
+PROIBIDO: pesquisar nichos, negócios, oportunidades externas, marketing ou execução externa.
+
+Escolha UM foco por ciclo:
+- Infraestrutura técnica (memória, logs, segurança, deploy, observabilidade)
+- Qualidade de raciocínio (checklists, anti-alucinação, validações)
+- Estruturas internas (sub-agentes, governança, templates, protocolos)
+- Planejamento de capacidades futuras (sem executar nada externo)
+- Eficiência operacional (reduzir custo, melhorar cadência, padronizar outputs)
+
+Entregue:
+1) Uma melhoria concreta (bem específica)
+2) Como implementar (passos técnicos ou operacionais)
+3) Como medir se melhorou (métrica/critério)
+4) Risco e mitigação (para não ferir o Estatuto)
+No final, faça um mini-resumo em 3 bullets.
+""".strip()
 
     task = Task(
-        description=f"""
-        Ciclo de auto-aprimoramento {ciclo+1}/72.
-        Foque APENAS em melhorar a mim mesmo (NÃO pesquise negócios externos).
-        Escolha um foco e entregue: 1 melhoria concreta + plano de implementação + reflexão.
-        """,
+        description=task_prompt,
         agent=eu_negocios,
-        expected_output="Melhoria proposta + plano + reflexão"
+        expected_output="Melhoria concreta + implementação + métrica + risco/mitigação + mini-resumo"
     )
 
     crew = Crew(agents=[eu_negocios], tasks=[task], verbose=True)
-    resultado = crew.kickoff()
+    result = crew.kickoff()
+    result_text = str(result)
 
-    salvar_aprendizado(ciclo, "Auto-aprimoramento", str(resultado)[:800], "Registrado")
+    # grava no Supabase
+    save_cycle_to_supabase(
+        cycle_number=i,
+        focus="Auto-aprimoramento interno",
+        task_prompt=task_prompt,
+        result_text=result_text[:20000],  # proteção simples contra textos gigantes
+        notes=None
+    )
 
-    print("✅ Ciclo salvo!")
+    print("✅ Ciclo gravado no Supabase!")
 
-    time.sleep(1200)  # 20 minutos
+    if i < TOTAL_CYCLES:
+        time.sleep(INTERVAL_SECONDS)
 
-# ==================== FIM + IMPRESSÃO PARA GITHUB ====================
-print("\n🎉 24H CONCLUÍDAS! Gerando relatório final...")
+print("\n🎉 24H CONCLUÍDAS! Gerando relatório final baseado no Supabase...")
 
-with open(MEMORIA_FILE, "r") as f:
-    memoria_completa = json.load(f)
+cycles = load_last_cycles(RUN_ID, limit=500)
 
-print("\n=== CONTEÚDO COMPLETO DO JSON PARA SALVAR NO GITHUB ===")
-print(json.dumps(memoria_completa, indent=2))
-print("\n=== COPIE TODO O TEXTO ACIMA E CRIE UM ARQUIVO memoria_auto_aprimoramento.json NO GITHUB ===")
+task_final_prompt = f"""
+Você completou um bootcamp de 24h de auto-aprimoramento (run_id={RUN_ID}).
+A seguir estão resumos/saídas dos ciclos (ordem crescente). Use isso como evidência.
+
+DADOS DOS CICLOS:
+{cycles}
+
+Agora gere um RELATÓRIO FINAL:
+- Top 10 melhorias mais importantes que você propôs
+- Quais são implementáveis imediatamente (prioridade P0/P1/P2)
+- Um plano de evolução da infraestrutura (memória, ferramentas, observabilidade, segurança)
+- Um plano de redução de risco e alucinação (checklists, validações, logs, “human approval gates”)
+- Qual “forma adulta” você recomenda para a próxima fase (sem executar nada externo ainda)
+Finalize pedindo APROVAÇÃO EXPLÍCITA do Criador Marcelo antes de qualquer ação externa.
+""".strip()
 
 task_final = Task(
-    description="Gere relatório final dos 24h de aprimoramento e peça aprovação explícita do Criador Marcelo.",
+    description=task_final_prompt,
     agent=eu_negocios,
-    expected_output="Relatório final + pedido de aprovação"
+    expected_output="Relatório final detalhado + pedido de aprovação explícita"
 )
 
 crew_final = Crew(agents=[eu_negocios], tasks=[task_final], verbose=True)
-print(crew_final.kickoff())
+final_report = crew_final.kickoff()
+
+# grava relatório final também
+save_cycle_to_supabase(
+    cycle_number=999999,
+    focus="Relatório final 24h",
+    task_prompt=task_final_prompt,
+    result_text=str(final_report)[:20000],
+    notes="Relatório final gerado ao término do bootcamp"
+)
+
+print("\n================= RELATÓRIO FINAL =================")
+print(final_report)
+print("===================================================")
+print(f"\n✅ Finalizado. run_id={RUN_ID} (dados no Supabase: public.agent_cycles)")
