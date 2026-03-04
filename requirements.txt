@@ -1,2 +1,4 @@
-crewai
-langchain-openai
+crewai>=0.67.1
+langchain-openai>=0.2.0
+openai>=1.40.0
+tiktoken==0.7.0 --only-binary :all:
