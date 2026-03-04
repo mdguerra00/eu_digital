@@ -19,6 +19,9 @@ OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
 TABLE = os.environ.get("AGENT_CYCLES_TABLE", "agent_cycles")
 
+# NOVO (tabela de estado, separada, sem mexer no agent_cycles)
+STATE_TABLE = os.environ.get("AGENT_STATE_TABLE", "agent_state")
+
 AGENT_NAME = os.environ.get("AGENT_NAME", "EU_DE_NEGOCIOS")
 FOCUS = os.environ.get("FOCUS", "Auto-aprimoramento interno")
 
@@ -75,7 +78,6 @@ def utc_now_dt() -> datetime:
 def utc_now_iso(dt: Optional[datetime] = None) -> str:
     if dt is None:
         dt = utc_now_dt()
-    # Gera formato mais limpo e compatível, ex.: 2026-03-04T18:20:00.123456Z
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
@@ -89,7 +91,6 @@ def parse_datetime(value: Any) -> Optional[datetime]:
         s = str(value).strip()
         if not s:
             return None
-        # Suporte a ISO com Z
         if s.endswith("Z"):
             s = s[:-1] + "+00:00"
         try:
@@ -107,10 +108,6 @@ def parse_datetime(value: Any) -> Optional[datetime]:
 # Supabase helpers
 # -----------------------------
 def fetch_recent_cycles(agent_name: str, limit: int = 10) -> List[Dict[str, Any]]:
-    """
-    Busca os ciclos mais recentes para memória do agente.
-    Ordena por created_at DESC para refletir a ordem temporal real.
-    """
     select_cols = [
         "id",
         CREATED_AT_COL,
@@ -136,11 +133,6 @@ def fetch_recent_cycles(agent_name: str, limit: int = 10) -> List[Dict[str, Any]
 
 
 def fetch_last_cycle(agent_name: str) -> Optional[Dict[str, Any]]:
-    """
-    Busca o último ciclo salvo.
-    Usamos created_at DESC, porque é a referência temporal correta
-    para segurar a cadência de 20 minutos mesmo após restart.
-    """
     select_cols = [
         "id",
         CREATED_AT_COL,
@@ -167,7 +159,6 @@ def summarize_memory(cycles: List[Dict[str, Any]]) -> str:
     if not cycles:
         return "Nenhum ciclo anterior encontrado."
 
-    # cycles veio DESC; para resumir, mostramos do mais antigo para o mais novo
     cycles_sorted = list(reversed(cycles))
     lines: List[str] = []
 
@@ -196,9 +187,6 @@ def summarize_memory(cycles: List[Dict[str, Any]]) -> str:
 
 
 def get_next_cycle_number(agent_name: str) -> int:
-    """
-    Busca o maior cycle_number já existente e soma 1.
-    """
     res = (
         sb.table(TABLE)
         .select(CYCLE_NUMBER_COL)
@@ -215,9 +203,6 @@ def get_next_cycle_number(agent_name: str) -> int:
 
 
 def write_cycle(row: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Faz insert do ciclo e retorna a linha salva.
-    """
     log("Insert payload keys:", sorted(list(row.keys())))
 
     res = sb.table(TABLE).insert(row).execute()
@@ -228,13 +213,6 @@ def write_cycle(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def seconds_until_next_cycle(agent_name: str, interval_seconds: int) -> int:
-    """
-    Calcula quantos segundos faltam até a próxima janela permitida.
-
-    Isso resolve dois problemas:
-    1) garante a cadência de ~20 min entre ciclos;
-    2) evita duplicação se o processo/container reiniciar.
-    """
     last_cycle = fetch_last_cycle(agent_name)
     if not last_cycle:
         return 0
@@ -242,7 +220,6 @@ def seconds_until_next_cycle(agent_name: str, interval_seconds: int) -> int:
     last_created_raw = last_cycle.get(CREATED_AT_COL)
     last_created_dt = parse_datetime(last_created_raw)
     if last_created_dt is None:
-        # Se não conseguiu interpretar, melhor não bloquear
         log(
             "Aviso: não foi possível interpretar",
             f"{CREATED_AT_COL}={last_created_raw!r}.",
@@ -262,6 +239,76 @@ def seconds_until_next_cycle(agent_name: str, interval_seconds: int) -> int:
         return remaining
 
     return 0
+
+
+# -----------------------------
+# NOVO: Agent State (prompt vivo)
+# -----------------------------
+def get_current_task_prompt() -> str:
+    """
+    Lê o prompt atual do agente na tabela agent_state.
+    Se não existir, cria com fallback e retorna.
+    """
+    fallback = TASK_PROMPT_ENV or "Rodar um ciclo de reflexão e auto-aprimoramento do agente (default)"
+
+    try:
+        res = (
+            sb.table(STATE_TABLE)
+            .select("agent_name, current_task_prompt, updated_at")
+            .eq("agent_name", AGENT_NAME)
+            .limit(1)
+            .execute()
+        )
+
+        if res.data:
+            p = (res.data[0].get("current_task_prompt") or "").strip()
+            return p or fallback
+
+        # Não existe ainda -> cria
+        sb.table(STATE_TABLE).insert({
+            "agent_name": AGENT_NAME,
+            "current_task_prompt": fallback,
+            "updated_at": utc_now_iso(),
+        }).execute()
+        return fallback
+
+    except Exception as e:
+        log("Aviso: falha ao ler/criar agent_state, usando fallback. Erro:", repr(e))
+        return fallback
+
+
+def update_task_prompt_from_cycle(saved_row: Dict[str, Any]) -> None:
+    """
+    Após salvar um ciclo, atualiza o prompt do próximo ciclo.
+    Não interfere no insert do ciclo; se falhar, só loga e segue.
+    """
+    try:
+        next_actions = (saved_row.get(NEXT_ACTIONS_COL) or "").strip()
+        reflection = (saved_row.get(REFLECTION_COL) or "").strip()
+
+        # Prompt simples e robusto: deriva diretamente do next_actions
+        new_prompt = next_actions or "Defina próximos passos concretos para o agente com base no último ciclo."
+
+        # Enriquecer com reflexão (sem ficar grande demais)
+        if reflection:
+            new_prompt = (
+                f"Use as lições/reflexões abaixo para executar os próximos passos.\n\n"
+                f"REFLECTION:\n{reflection}\n\n"
+                f"NEXT_ACTIONS:\n{next_actions or '[vazio]'}\n\n"
+                f"Agora execute o próximo passo mais importante primeiro, com entregáveis claros."
+            )
+
+        # Upsert (update se existe; insert se não existe)
+        sb.table(STATE_TABLE).upsert({
+            "agent_name": AGENT_NAME,
+            "current_task_prompt": new_prompt,
+            "updated_at": utc_now_iso(),
+        }).execute()
+
+        log("Agent state atualizado: current_task_prompt definido a partir do último ciclo.")
+
+    except Exception as e:
+        log("Aviso: falha ao atualizar agent_state (não bloqueia). Erro:", repr(e))
 
 
 # -----------------------------
@@ -327,7 +374,6 @@ Entregue JSON puro no formato:
     reflection = (data.get("reflection") or "").strip()
     next_actions = (data.get("next_actions") or "").strip()
 
-    # Nunca deixar campos principais vazios
     if not result_text:
         result_text = "Sem result_text (fallback): o modelo não retornou conteúdo."
     if not reflection:
@@ -346,12 +392,10 @@ Entregue JSON puro no formato:
 # Core cycle
 # -----------------------------
 def run_once(run_id: str) -> Dict[str, Any]:
-    """
-    Executa exatamente 1 ciclo completo.
-    """
     cycle_started_at = utc_now_dt()
 
-    task_prompt = TASK_PROMPT_ENV or "Rodar um ciclo de reflexão e auto-aprimoramento do agente (default)"
+    # ALTERAÇÃO MÍNIMA: em vez do env fixo, lê do agent_state
+    task_prompt = get_current_task_prompt()
 
     recent = fetch_recent_cycles(AGENT_NAME, limit=MEMORY_WINDOW)
     memory_summary = summarize_memory(recent)
@@ -392,13 +436,13 @@ def run_once(run_id: str) -> Dict[str, Any]:
         f"created_at={saved.get(CREATED_AT_COL)}"
     )
 
+    # NOVO (não bloqueia): atualiza prompt do próximo ciclo
+    update_task_prompt_from_cycle(saved)
+
     return saved
 
 
 def sleep_in_chunks(total_seconds: int) -> None:
-    """
-    Dorme em blocos curtos para manter logs previsíveis e evitar sleeps longos cegos.
-    """
     total_seconds = max(0, int(total_seconds))
     if total_seconds == 0:
         return
@@ -415,20 +459,12 @@ def sleep_in_chunks(total_seconds: int) -> None:
 
 
 def main_loop() -> None:
-    """
-    Loop principal do worker.
-
-    Regras:
-    - se ainda não passaram 20 min do último ciclo salvo, espera;
-    - quando a janela abre, executa 1 ciclo;
-    - depois volta a checar novamente;
-    - se o container reiniciar, a checagem do último created_at evita duplicação.
-    """
     process_run_id = os.environ.get("RUN_ID") or str(uuid.uuid4())
 
     log("Worker iniciado.")
     log(f"AGENT_NAME={AGENT_NAME}")
     log(f"TABLE={TABLE}")
+    log(f"STATE_TABLE={STATE_TABLE}")
     log(f"MODEL={MODEL}")
     log(f"LOOP_INTERVAL_MINUTES={LOOP_INTERVAL_MINUTES}")
     log(f"MEMORY_WINDOW={MEMORY_WINDOW}")
@@ -444,10 +480,6 @@ def main_loop() -> None:
                 continue
 
             run_once(process_run_id)
-
-            # Não dormimos fixo 20 min aqui.
-            # Voltamos ao topo e recalculamos com base no último created_at salvo.
-            # Isso mantém a cadência correta mesmo se a execução demorar.
             continue
 
         except KeyboardInterrupt:
@@ -461,8 +493,5 @@ def main_loop() -> None:
             sleep_in_chunks(ERROR_RETRY_SECONDS)
 
 
-# -----------------------------
-# Main
-# -----------------------------
 if __name__ == "__main__":
     main_loop()
