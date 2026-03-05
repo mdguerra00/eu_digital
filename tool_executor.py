@@ -367,22 +367,39 @@ class ToolExecutor:
             }
     
     def _execute_scrape(self, url: str) -> Dict[str, Any]:
-        """Executa raspagem de página."""
+        """Executa raspagem de página via Steel Browser ou requests+BS4."""
         try:
             result = self.scraper_tool.scrape_page(url, extract_text=True)
+            success = result.get("success", False)
+            text = (result.get("text") or "").strip()
+            provider = result.get("provider", "unknown")
+
+            # Log explícito para diagnóstico nos logs do Railway
+            if success:
+                print(f"[Scraper] OK provider={provider} | chars={len(text)} | url={url[:80]!r}", flush=True)
+            else:
+                err = result.get("error", "sem detalhe")
+                steel_err = result.get("steel_error", "")
+                print(f"[Scraper] ERRO provider={provider} | error={err!r} | steel_error={steel_err!r} | url={url[:80]!r}", flush=True)
+
             return {
                 "tool": "web_scraper",
                 "url": url,
-                "success": result.get("success", False),
+                "success": success,
                 "title": result.get("title", "N/A"),
-                "text_length": len(result.get("text", "")),
+                "text": text[:2000],          # conteudo real da pagina
+                "text_length": len(text),
+                "provider": provider,
+                "error": result.get("error"),
+                "steel_error": result.get("steel_error"),
             }
         except Exception as e:
+            print(f"[Scraper] EXCECAO | error={repr(e)} | url={url[:80]!r}", flush=True)
             return {
                 "tool": "web_scraper",
                 "url": url,
                 "success": False,
-                "error": str(e),
+                "error": repr(e),
             }
     
     def _execute_record_revenue(self, revenue_info: Dict[str, Any]) -> Dict[str, Any]:
