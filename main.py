@@ -10,6 +10,7 @@ from pathlib import Path
 
 from supabase import create_client, Client
 from openai import OpenAI
+from postgrest.exceptions import APIError
 
 # Importar módulos do agente
 from financial_module import FinancialWallet
@@ -299,7 +300,34 @@ def write_cycle(row: Dict[str, Any]) -> Dict[str, Any]:
     log("Insert payload keys:", sorted(list(row.keys())))
 
     if sb is not None:
-        res = sb.table(TABLE).insert(row).execute()
+        try:
+            res = sb.table(TABLE).insert(row).execute()
+        except APIError as e:
+            error_payload = getattr(e, "args", [None])[0] or {}
+            error_code = error_payload.get("code")
+            error_message = error_payload.get("message", "")
+
+            missing_column = None
+            if error_code == "PGRST204":
+                marker = "Could not find the '"
+                if marker in error_message:
+                    start = error_message.find(marker) + len(marker)
+                    end = error_message.find("' column", start)
+                    if end > start:
+                        missing_column = error_message[start:end]
+
+            if missing_column and missing_column in row:
+                log(
+                    f"Aviso: coluna ausente no schema cache ({missing_column!r}). "
+                    "Removendo do payload e tentando novamente."
+                )
+                sanitized_row = dict(row)
+                sanitized_row.pop(missing_column, None)
+                log("Retry insert payload keys:", sorted(list(sanitized_row.keys())))
+                res = sb.table(TABLE).insert(sanitized_row).execute()
+            else:
+                raise
+
         if not res.data:
             raise RuntimeError(f"Insert falhou (sem data retornada). Response: {res}")
         return res.data[0]
