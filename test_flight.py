@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Test Flight Script para o Agente EU DE NEGÓCIOS
-Este script simula um ambiente local com Supabase e Brave Search para testar o agente.
+Este script simula um ambiente local com Supabase e Perplexity Search para testar o agente.
 """
 
 import os
@@ -97,8 +97,8 @@ class MockResponse:
 def mock_create_client(url, key):
     return MockSupabaseClient()
 
-# Simular Brave Search API
-class MockBraveSearchTool:
+# Simular Perplexity Search API
+class MockPerplexitySearchTool:
     def __init__(self, api_key=None):
         self.api_key = api_key
     
@@ -126,7 +126,7 @@ class MockBraveSearchTool:
         
         return []
 
-# Patch do Supabase e Brave Search
+# Patch do Supabase e Perplexity Search
 def run_test_flight():
     print("\n" + "="*70)
     print("VÔOO DE TESTE - AGENTE EU DE NEGÓCIOS")
@@ -135,9 +135,9 @@ def run_test_flight():
     # Importar após patches
     sys.path.insert(0, '/home/ubuntu/eu_digital')
     
-    # Patch do Supabase e Brave Search
+    # Patch do Supabase e Perplexity Search
     with patch('supabase.create_client', mock_create_client):
-        with patch('tools_module.WebSearchTool', MockBraveSearchTool):
+        with patch('tools_module.WebSearchTool', MockPerplexitySearchTool):
             import main
             
             print("\n[✓] Ambiente de teste configurado")
