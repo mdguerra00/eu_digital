@@ -1079,9 +1079,17 @@ def run_once(run_id: str) -> Dict[str, Any]:
         if execution_plan:
             tool_execution = tool_executor.execute_plan(execution_plan, cycle_number)
         else:
-            if AGENT_MODE == "real":
-                raise RuntimeError("AGENT_MODE=real nao permite execucao sem execution_plan.")
-            tool_execution = tool_executor.execute_tools(llm_out["next_actions"], cycle_number)
+            # LLM nao gerou execution_plan — forcar web_search como fallback em vez de falhar
+            log("[RunOnce] AVISO: execution_plan vazio. Forcando web_search de fallback.")
+            fallback_query = (llm_out.get("next_actions") or "oportunidades afiliados Brasil 2026")[:120]
+            fallback_plan = [{
+                "id": "step_fallback",
+                "tool": "web_search",
+                "args": {"query": fallback_query, "count": 5},
+                "success_criteria": "obter dados relevantes",
+                "on_failure": "skip",
+            }]
+            tool_execution = tool_executor.execute_plan(fallback_plan, cycle_number)
 
         log(f"Ferramentas executadas: {len(tool_execution['tools_executed'])}")
 
