@@ -71,6 +71,7 @@ CYCLE_NUMBER_COL = os.environ.get("CYCLE_NUMBER_COL", "cycle_number")
 FOCUS_COL = os.environ.get("FOCUS_COL", "focus")
 RECEIPTS_TABLE = os.environ.get("EXECUTION_RECEIPTS_TABLE", "execution_receipts")
 _receipts_table_disabled = False
+CREATOR_MESSAGES_TABLE = os.environ.get("CREATOR_MESSAGES_TABLE", "creator_messages")
 
 # --- Carregamento do Estatuto ---
 ESTATUTO_PATH = Path(__file__).parent / "ESTATUTO.md"
@@ -645,6 +646,71 @@ def _normalize_execution_plan(plan: Any) -> List[Dict[str, Any]]:
     return [step for step in plan if isinstance(step, dict)]
 
 
+# -----------------------------
+# Creator Messages — canal Criador -> Agente via Supabase
+# -----------------------------
+def fetch_pending_creator_messages() -> List[Dict[str, Any]]:
+    """Busca mensagens pendentes do Criador ordenadas por data."""
+    if sb is None:
+        return []
+    try:
+        res = (
+            sb.table(CREATOR_MESSAGES_TABLE)
+            .select("id, message, priority, created_at, author")
+            .eq("agent_name", AGENT_NAME)
+            .eq("status", "pending")
+            .order("created_at", desc=False)
+            .limit(5)
+            .execute()
+        )
+        msgs = res.data or []
+        if msgs:
+            log(f"[CreatorMessages] {len(msgs)} mensagem(ns) pendente(s) do Criador.")
+        return msgs
+    except Exception as e:
+        log(f"[CreatorMessages] Aviso: falha ao buscar ({repr(e)}). Continuando sem feedback.")
+        return []
+
+
+def mark_creator_messages_processed(message_ids: List[int], cycle_number: int) -> None:
+    """Marca mensagens como processadas ao final do ciclo."""
+    if sb is None or not message_ids:
+        return
+    try:
+        for msg_id in message_ids:
+            sb.table(CREATOR_MESSAGES_TABLE).update({
+                "status": "processed",
+                "read_at": utc_now_iso(),
+                "processed_at": utc_now_iso(),
+                "cycle_number": cycle_number,
+            }).eq("id", msg_id).execute()
+        log(f"[CreatorMessages] {len(message_ids)} mensagem(ns) marcada(s) como processada(s).")
+    except Exception as e:
+        log(f"[CreatorMessages] Aviso: falha ao marcar ({repr(e)}).")
+
+
+def build_task_prompt_with_feedback(base_prompt: str, messages: List[Dict[str, Any]]) -> str:
+    """Injeta mensagens do Criador no task_prompt com prioridade alta."""
+    if not messages:
+        return base_prompt
+
+    urgent = [m for m in messages if m.get("priority") == "urgent"]
+    others = [m for m in messages if m.get("priority") != "urgent"]
+
+    parts = []
+    if urgent:
+        urgent_text = "\n".join(f"- {m['message']}" for m in urgent)
+        parts.append(f"INSTRUCAO URGENTE DO CRIADOR (execute AGORA, prioridade maxima):\n{urgent_text}")
+    if others:
+        others_text = "\n".join(f"- [{m.get('priority','normal').upper()}] {m['message']}" for m in others)
+        parts.append(f"INPUT DO CRIADOR (considere ao planejar este ciclo):\n{others_text}")
+
+    parts.append(f"TASK BASE:\n{base_prompt}")
+    combined = "\n\n".join(parts)
+    log(f"[CreatorMessages] Task prompt enriquecido com {len(messages)} mensagem(ns).")
+    return combined
+
+
 def _write_execution_receipt(
     *,
     run_id: str,
@@ -897,8 +963,13 @@ Entregue JSON puro no formato:
 def run_once(run_id: str) -> Dict[str, Any]:
     cycle_started_at = utc_now_dt()
 
-    # ALTERAÇÃO MÍNIMA: em vez do env fixo, lê do agent_state
+    # Lê prompt base do agent_state
     task_prompt = get_current_task_prompt()
+
+    # Lê mensagens pendentes do Criador e enriquece o prompt
+    creator_msgs = fetch_pending_creator_messages()
+    creator_msg_ids = [m["id"] for m in creator_msgs]
+    task_prompt = build_task_prompt_with_feedback(task_prompt, creator_msgs)
 
     recent = fetch_recent_cycles(AGENT_NAME, limit=MEMORY_WINDOW)
     memory_summary = summarize_memory(recent)
@@ -908,6 +979,7 @@ def run_once(run_id: str) -> Dict[str, Any]:
     log(
         f"Iniciando ciclo {cycle_number} | "
         f"run_id={run_id} | "
+        f"creator_msgs={len(creator_msgs)} | "
         f"started_at={utc_now_iso(cycle_started_at)}"
     )
 
@@ -940,8 +1012,12 @@ def run_once(run_id: str) -> Dict[str, Any]:
         f"created_at={saved.get(CREATED_AT_COL)}"
     )
 
-    # NOVO (não bloqueia): atualiza prompt do próximo ciclo
+    # Atualiza prompt do próximo ciclo
     update_task_prompt_from_cycle(saved)
+
+    # Marca mensagens do Criador como processadas (nao bloqueia)
+    if creator_msg_ids:
+        mark_creator_messages_processed(creator_msg_ids, cycle_number)
     
     # Executar ferramentas (prioriza plano estruturado)
     try:
