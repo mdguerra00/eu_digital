@@ -263,14 +263,27 @@ def summarize_memory(cycles: List[Dict[str, Any]]) -> str:
         def trunc(s: str, n: int) -> str:
             return (s[:n] + "…") if len(s) > n else s
 
-        lines.append(
+        # Separar result_text do tool_results_summary se existir
+        tool_marker = "=== RESULTADOS REAIS DAS FERRAMENTAS ==="
+        result_base = result
+        tool_data = ""
+        if tool_marker in result:
+            parts = result.split(tool_marker, 1)
+            result_base = parts[0].strip()
+            tool_data = parts[1].strip() if len(parts) > 1 else ""
+
+        entry = (
             f"- Ciclo {cn} ({created}):\n"
-            f"  Focus: {trunc(focus, 140) or '[vazio]'}\n"
-            f"  Task: {trunc(tp, 180) or '[vazio]'}\n"
-            f"  Result: {trunc(result, 380) or '[vazio]'}\n"
-            f"  Reflection: {trunc(refl, 280) or '[vazio]'}\n"
-            f"  Next: {trunc(nxt, 280) or '[vazio]'}"
+            f"  Focus: {trunc(focus, 120) or '[vazio]'}\n"
+            f"  Result: {trunc(result_base, 300) or '[vazio]'}\n"
         )
+        if tool_data:
+            entry += f"  DadosReais: {trunc(tool_data, 500)}\n"
+        entry += (
+            f"  Reflection: {trunc(refl, 200) or '[vazio]'}\n"
+            f"  Next: {trunc(nxt, 200) or '[vazio]'}"
+        )
+        lines.append(entry)
 
     return "\n".join(lines)
 
@@ -1013,6 +1026,113 @@ def run_once(run_id: str) -> Dict[str, Any]:
         cycle_number=cycle_number,
     )
 
+    # -------------------------------------------------------
+    # EXECUTAR FERRAMENTAS ANTES DE SALVAR
+    # Assim os resultados reais entram no registro do ciclo
+    # -------------------------------------------------------
+    tool_results_summary = ""
+    tool_execution: Dict[str, Any] = {"tools_executed": [], "insights": [], "errors": []}
+
+    try:
+        execution_plan = llm_out.get("execution_plan") or []
+        if execution_plan:
+            tool_execution = tool_executor.execute_plan(execution_plan, cycle_number)
+        else:
+            if AGENT_MODE == "real":
+                raise RuntimeError("AGENT_MODE=real nao permite execucao sem execution_plan.")
+            tool_execution = tool_executor.execute_tools(llm_out["next_actions"], cycle_number)
+
+        log(f"Ferramentas executadas: {len(tool_execution['tools_executed'])}")
+
+        # Gravar receipts e construir resumo dos resultados
+        summary_parts = []
+        for tool_result in tool_execution["tools_executed"]:
+            tool_name = tool_result.get("tool", "unknown")
+            success = tool_result.get("success", False)
+            log(f"  - {tool_name}: success={success}")
+
+            # Resumo legível do resultado para salvar no ciclo
+            if tool_name == "web_search" and success:
+                raw_answer = tool_result.get("raw_answer", "")
+                previews = tool_result.get("results_preview", [])
+                part = f"[web_search: '{tool_result.get('query','')}'] "
+                if raw_answer:
+                    part += raw_answer[:600]
+                elif previews:
+                    part += " | ".join(previews[:3])
+                summary_parts.append(part)
+
+            elif tool_name == "market_analyzer" and success:
+                opps = tool_result.get("opportunities", [])
+                niche = tool_result.get("niche", "")
+                search_data = tool_result.get("search_results", {})
+                part = f"[market_analyzer: '{niche}'] "
+                # Incluir raw_answer da busca interna se disponível
+                if isinstance(search_data, dict):
+                    raw = search_data.get("raw_answer", "")
+                    if raw:
+                        part += raw[:600]
+                    else:
+                        part += " | ".join(opps[:4])
+                else:
+                    part += " | ".join(opps[:4])
+                summary_parts.append(part)
+
+            elif tool_name == "web_scraper" and success:
+                text = tool_result.get("text", "") or tool_result.get("title", "")
+                summary_parts.append(f"[web_scraper: '{tool_result.get('url','')}'] {text[:400]}")
+
+            elif not success:
+                summary_parts.append(f"[{tool_name}: ERRO] {tool_result.get('error','desconhecido')}")
+
+            # Gravar receipt
+            idempotency_key = (
+                tool_result.get("idempotency_key")
+                or hashlib.sha256(
+                    f"{run_id}:{cycle_number}:{tool_result.get('step_id') or tool_name}".encode("utf-8")
+                ).hexdigest()
+            )
+            if _receipt_already_exists(idempotency_key):
+                log(f"  - receipt ja existe ({idempotency_key[:12]}...), pulando")
+            else:
+                _write_execution_receipt(
+                    run_id=run_id,
+                    cycle_number=cycle_number,
+                    step_id=tool_result.get("step_id") or tool_name or "unknown_step",
+                    tool=tool_name,
+                    args=tool_result.get("args_input") or {},
+                    tool_output=tool_result,
+                    used_fallback=bool(tool_result.get("used_fallback", False)),
+                    idempotency_key=idempotency_key,
+                )
+
+            if AGENT_MODE == "real" and bool(tool_result.get("used_fallback", False)):
+                raise RuntimeError(f"Fallback detectado em modo real para tool={tool_name}")
+
+        if tool_execution["insights"]:
+            log(f"Insights: {len(tool_execution['insights'])}")
+            for insight in tool_execution["insights"]:
+                log(f"  - {insight}")
+            summary_parts.extend(tool_execution["insights"])
+
+        tool_results_summary = "\n\n".join(summary_parts)
+
+    except Exception as e:
+        log(f"Erro ao executar ferramentas: {repr(e)}")
+        tool_results_summary = f"[ERRO nas ferramentas]: {repr(e)}"
+
+    # -------------------------------------------------------
+    # SALVAR CICLO — agora com tool_results incluídos
+    # -------------------------------------------------------
+    # Enriquecer result_text com os dados reais das tools
+    enriched_result = llm_out["result_text"]
+    if tool_results_summary:
+        enriched_result = (
+            llm_out["result_text"]
+            + "\n\n=== RESULTADOS REAIS DAS FERRAMENTAS ===\n"
+            + tool_results_summary
+        )
+
     row: Dict[str, Any] = {
         CREATED_AT_COL: utc_now_iso(cycle_started_at),
         AGENT_NAME_COL: AGENT_NAME,
@@ -1020,7 +1140,7 @@ def run_once(run_id: str) -> Dict[str, Any]:
         CYCLE_NUMBER_COL: cycle_number,
         FOCUS_COL: FOCUS,
         TASK_PROMPT_COL: task_prompt,
-        RESULT_COL: llm_out["result_text"],
+        RESULT_COL: enriched_result,
         REFLECTION_COL: llm_out["reflection"],
         NEXT_ACTIONS_COL: llm_out["next_actions"],
         PLAN_COL: llm_out.get("execution_plan", []),
@@ -1029,63 +1149,17 @@ def run_once(run_id: str) -> Dict[str, Any]:
     saved = write_cycle(row)
 
     log(
-        f"Ciclo salvo com sucesso | "
-        f"id={saved.get('id')} | "
-        f"cycle_number={saved.get(CYCLE_NUMBER_COL)} | "
-        f"created_at={saved.get(CREATED_AT_COL)}"
+        f"Ciclo salvo | id={saved.get('id')} | "
+        f"cycle={saved.get(CYCLE_NUMBER_COL)} | "
+        f"tool_results={len(tool_results_summary)} chars"
     )
 
     # Atualiza prompt do próximo ciclo
     update_task_prompt_from_cycle(saved)
 
-    # Marca mensagens do Criador como processadas (nao bloqueia)
+    # Marca mensagens do Criador como processadas
     if creator_msg_ids:
         mark_creator_messages_processed(creator_msg_ids, cycle_number)
-    
-    # Executar ferramentas (prioriza plano estruturado)
-    try:
-        execution_plan = llm_out.get("execution_plan") or []
-        if execution_plan:
-            tool_execution = tool_executor.execute_plan(execution_plan, cycle_number)
-        else:
-            if AGENT_MODE == "real":
-                raise RuntimeError("AGENT_MODE=real não permite execução sem execution_plan.")
-            tool_execution = tool_executor.execute_tools(llm_out["next_actions"], cycle_number)
-
-        log(f"Ferramentas executadas: {len(tool_execution['tools_executed'])}")
-        for tool_result in tool_execution['tools_executed']:
-            log(f"  - {tool_result.get('tool')}: {tool_result.get('success')}")
-            idempotency_key = (
-                tool_result.get("idempotency_key")
-                or hashlib.sha256(
-                    f"{run_id}:{cycle_number}:{tool_result.get('step_id') or tool_result.get('tool')}".encode("utf-8")
-                ).hexdigest()
-            )
-
-            if _receipt_already_exists(idempotency_key):
-                log(f"  - receipt já existe para idempotency_key={idempotency_key[:12]}..., pulando gravação")
-            else:
-                _write_execution_receipt(
-                    run_id=run_id,
-                    cycle_number=cycle_number,
-                    step_id=tool_result.get("step_id") or tool_result.get("tool") or "unknown_step",
-                    tool=tool_result.get("tool") or "unknown_tool",
-                    args=tool_result.get("args_input") or {},
-                    tool_output=tool_result,
-                    used_fallback=bool(tool_result.get("used_fallback", False)),
-                    idempotency_key=idempotency_key,
-                )
-
-            if AGENT_MODE == "real" and bool(tool_result.get("used_fallback", False)):
-                raise RuntimeError(
-                    f"Fallback detectado em modo real para tool={tool_result.get('tool')}"
-                )
-        if tool_execution['insights']:
-            log(f"Insights gerados: {len(tool_execution['insights'])}")
-            for insight in tool_execution['insights']:
-                log(f"  - {insight}")
-    except Exception as e:
-        log(f"Erro ao executar ferramentas: {repr(e)}")
 
     return saved
 
