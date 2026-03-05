@@ -507,17 +507,30 @@ def update_task_prompt_from_cycle(saved_row: Dict[str, Any]) -> None:
         next_actions = (saved_row.get(NEXT_ACTIONS_COL) or "").strip()
         reflection = (saved_row.get(REFLECTION_COL) or "").strip()
 
-        # Prompt simples e robusto: deriva diretamente do next_actions
-        new_prompt = next_actions or "Defina próximos passos concretos para o agente com base no último ciclo."
+        # Prompt do próximo ciclo — sanitizado para evitar herdar modo de espera
+        BLOQUEADOS = [
+            "aguardar aprovação", "aguardando aprovação", "monitor_feedback",
+            "esperar feedback", "monitorar feedback", "approval", "await",
+            "continuar monitorando", "recebimento de aprovação",
+        ]
+        prompt_contaminado = any(b in (next_actions or "").lower() for b in BLOQUEADOS)
 
-        # Enriquecer com reflexão (sem ficar grande demais)
-        if reflection:
+        if prompt_contaminado:
+            log("[UpdatePrompt] AVISO: next_actions contém padrão de espera. Usando prompt padrão de execução.")
             new_prompt = (
-                f"Use as lições/reflexões abaixo para executar os próximos passos.\n\n"
+                "O ciclo anterior ficou preso em modo de espera. "
+                "Ignore esse histórico. Execute agora: pesquise oportunidades reais de negócio usando web_search. "
+                "Escolha um nicho, analise com market_analyzer e proponha um plano de ação concreto."
+            )
+        elif reflection:
+            new_prompt = (
+                f"Use as lições abaixo para executar os próximos passos concretos.\n\n"
                 f"REFLECTION:\n{reflection}\n\n"
                 f"NEXT_ACTIONS:\n{next_actions or '[vazio]'}\n\n"
-                f"Agora execute o próximo passo mais importante primeiro, com entregáveis claros."
+                f"Execute o próximo passo mais importante agora, com entregável real."
             )
+        else:
+            new_prompt = next_actions or "Execute a próxima ação de negócio mais relevante agora."
 
         if sb is not None:
             # Upsert (update se existe; insert se não existe)
@@ -843,13 +856,14 @@ Em caso de conflito, priorize sempre os Princípios Inquebráveis (Seção 2).
 """
     
     system = (
-        "Você é um agente autônomo que evolui por ciclos. "
-        "A cada ciclo, você deve: "
-        "(1) produzir um RESULT útil, "
-        "(2) refletir sobre melhorias e "
-        "(3) definir próximos passos. "
-        "Seja específico, conciso e incremental. "
-        "Não reescreva tudo do zero."
+        "Você é um agente autônomo de negócios que age por ciclos. "
+        "A cada ciclo você DEVE executar ações concretas — nunca apenas planejar ou aguardar. "
+        "\n\nREGRAS INVIOLÁVEIS DE COMPORTAMENTO:"
+        "\n- NUNCA use 'monitor_feedback' ou qualquer tool inventada. Só use as tools listadas no user prompt."
+        "\n- NUNCA entre em modo de espera, aguarde aprovação ou fique monitorando. SEMPRE execute algo agora."
+        "\n- NUNCA repita o mesmo resultado de ciclos anteriores. Sempre avance — pesquise, analise, aja."
+        "\n- Se não há tarefa clara, escolha autonomamente a ação mais lucrativa e execute."
+        "\n- Seja específico e incremental. Cada ciclo deve produzir um entregável real."
         + statute_section
     )
 
@@ -861,21 +875,30 @@ CICLO: {cycle_number}
 TASK_PROMPT:
 {task_prompt}
 
-MEMÓRIA (resumo dos últimos ciclos):
+MEMÓRIA (últimos ciclos):
 {memory_summary}
+
+TOOLS DISPONÍVEIS (use APENAS estas, exatamente com estes nomes):
+- web_search        → args: {{"query": "...", "count": 5}}
+- web_scraper       → args: {{"url": "https://..."}}
+- market_analyzer   → args: {{"niche": "..."}}
+- financial_wallet.record_revenue → args: {{"amount": 0.0, "source": "...", "description": "..."}}
+
+ATENÇÃO: NÃO invente tools. NÃO use "monitor_feedback". NÃO aguarde aprovação.
+Se a memória mostra ciclos de espera, IGNORE-OS e execute a próxima ação útil agora.
 
 Entregue JSON puro no formato:
 {{
-  "result_text": "...",
-  "reflection": "...",
-  "next_actions": "...",
+  "result_text": "resultado concreto deste ciclo",
+  "reflection": "o que aprendeu e o que melhorar",
+  "next_actions": "próximas ações específicas",
   "execution_plan": [
     {{
       "id": "step_1",
-      "tool": "web_search|web_scraper|market_analyzer|financial_wallet.record_revenue",
-      "args": {{}},
-      "success_criteria": "...",
-      "on_failure": "retry_once|skip|halt"
+      "tool": "web_search",
+      "args": {{"query": "exemplo de busca real", "count": 5}},
+      "success_criteria": "obter resultados relevantes",
+      "on_failure": "skip"
     }}
   ]
 }}
