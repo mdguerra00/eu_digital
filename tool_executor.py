@@ -325,11 +325,21 @@ class ToolExecutor:
             }
     
     def _execute_web_search(self, query: str, count: int = 5) -> Dict[str, Any]:
-        """Executa busca web."""
+        """Executa busca web e preserva o conteudo completo da Perplexity."""
         try:
             result = self.search_tool.search(query, count=count)
             urls = [r.get("url") for r in result.get("results", []) if r.get("url")]
 
+            # raw_answer = resposta completa da Perplexity (o dado valioso)
+            raw_answer = (result.get("raw_answer") or "").strip()
+
+            # descriptions = snippets de cada resultado
+            descriptions = [
+                r.get("description", "") for r in result.get("results", [])[:5]
+                if r.get("description")
+            ]
+
+            # Scrape da primeira URL para enriquecer ainda mais
             enrichment_scrape = None
             if urls:
                 enrichment_scrape = self._execute_scrape(urls[0])
@@ -339,8 +349,11 @@ class ToolExecutor:
                 "query": query,
                 "success": result.get("success", False),
                 "result_count": result.get("result_count", 0),
-                "results_preview": [r["title"] for r in result.get("results", [])[:3]],
+                "raw_answer": raw_answer,           # resposta completa da Perplexity
+                "descriptions": descriptions,       # snippets dos resultados
+                "results_preview": [r.get("title","") for r in result.get("results", [])[:3]],
                 "top_result_url": urls[0] if urls else None,
+                "all_urls": urls[:5],
                 "used_fallback": result.get("used_fallback", False),
                 "provider": (result.get("provider_meta") or {}).get("provider", "unknown"),
                 "enrichment_scrape": enrichment_scrape,
