@@ -19,9 +19,14 @@ from tool_executor import ToolExecutor
 # -----------------------------
 # Config
 # -----------------------------
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_ANON_KEY"]
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+# Tentar carregar Supabase, mas permitir fallback se não estiver configurado
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+
+# Validar que pelo menos OpenAI está configurado
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY não está configurada. Por favor, defina a variável de ambiente.")
 
 TABLE = os.environ.get("AGENT_CYCLES_TABLE", "agent_cycles")
 
@@ -73,7 +78,14 @@ else:
 # -----------------------------
 # Clients
 # -----------------------------
-sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Inicializar Supabase apenas se as credenciais estiverem disponíveis
+if SUPABASE_URL and SUPABASE_KEY:
+    sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    print(f"[INFO] Supabase conectado: {SUPABASE_URL}")
+else:
+    print("[AVISO] Supabase não configurado. Usando fallback local (arquivo JSON).")
+    sb = None
+
 oa = OpenAI(api_key=OPENAI_API_KEY)
 
 # Inicializar módulos do agente
@@ -132,50 +144,77 @@ def parse_datetime(value: Any) -> Optional[datetime]:
 # Supabase helpers
 # -----------------------------
 def fetch_recent_cycles(agent_name: str, limit: int = 10) -> List[Dict[str, Any]]:
-    select_cols = [
-        "id",
-        CREATED_AT_COL,
-        AGENT_NAME_COL,
-        RUN_ID_COL,
-        CYCLE_NUMBER_COL,
-        FOCUS_COL,
-        TASK_PROMPT_COL,
-        RESULT_COL,
-        REFLECTION_COL,
-        NEXT_ACTIONS_COL,
-    ]
-
-    res = (
-        sb.table(TABLE)
-        .select(", ".join(select_cols))
-        .eq(AGENT_NAME_COL, agent_name)
-        .order(CREATED_AT_COL, desc=True)
-        .limit(limit)
-        .execute()
-    )
-    return res.data or []
+    if sb is not None:
+        select_cols = [
+            "id",
+            CREATED_AT_COL,
+            AGENT_NAME_COL,
+            RUN_ID_COL,
+            CYCLE_NUMBER_COL,
+            FOCUS_COL,
+            TASK_PROMPT_COL,
+            RESULT_COL,
+            REFLECTION_COL,
+            NEXT_ACTIONS_COL,
+        ]
+        res = (
+            sb.table(TABLE)
+            .select(", ".join(select_cols))
+            .eq(AGENT_NAME_COL, agent_name)
+            .order(CREATED_AT_COL, desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return res.data or []
+    
+    cycles_file = Path("agent_cycles.json")
+    if not cycles_file.exists():
+        return []
+    
+    try:
+        with open(cycles_file, 'r', encoding='utf-8') as f:
+            cycles = json.load(f)
+        filtered = [c for c in cycles if c.get(AGENT_NAME_COL) == agent_name]
+        return sorted(filtered, key=lambda x: x.get(CREATED_AT_COL, ""), reverse=True)[:limit]
+    except Exception as e:
+        log(f"Erro ao ler cycles.json: {e}")
+        return []
 
 
 def fetch_last_cycle(agent_name: str) -> Optional[Dict[str, Any]]:
-    select_cols = [
-        "id",
-        CREATED_AT_COL,
-        CYCLE_NUMBER_COL,
-        RUN_ID_COL,
-        AGENT_NAME_COL,
-    ]
-
-    res = (
-        sb.table(TABLE)
-        .select(", ".join(select_cols))
-        .eq(AGENT_NAME_COL, agent_name)
-        .order(CREATED_AT_COL, desc=True)
-        .limit(1)
-        .execute()
-    )
-
-    if res.data:
-        return res.data[0]
+    if sb is not None:
+        select_cols = [
+            "id",
+            CREATED_AT_COL,
+            CYCLE_NUMBER_COL,
+            RUN_ID_COL,
+            AGENT_NAME_COL,
+        ]
+        res = (
+            sb.table(TABLE)
+            .select(", ".join(select_cols))
+            .eq(AGENT_NAME_COL, agent_name)
+            .order(CREATED_AT_COL, desc=True)
+            .limit(1)
+            .execute()
+        )
+        if res.data:
+            return res.data[0]
+        return None
+    
+    cycles_file = Path("agent_cycles.json")
+    if not cycles_file.exists():
+        return None
+    
+    try:
+        with open(cycles_file, 'r', encoding='utf-8') as f:
+            cycles = json.load(f)
+        filtered = [c for c in cycles if c.get(AGENT_NAME_COL) == agent_name]
+        if filtered:
+            return sorted(filtered, key=lambda x: x.get(CREATED_AT_COL, ""), reverse=True)[0]
+    except Exception as e:
+        log(f"Erro ao ler cycles.json: {e}")
+    
     return None
 
 
@@ -229,11 +268,32 @@ def get_next_cycle_number(agent_name: str) -> int:
 def write_cycle(row: Dict[str, Any]) -> Dict[str, Any]:
     log("Insert payload keys:", sorted(list(row.keys())))
 
-    res = sb.table(TABLE).insert(row).execute()
-    if not res.data:
-        raise RuntimeError(f"Insert falhou (sem data retornada). Response: {res}")
-
-    return res.data[0]
+    if sb is not None:
+        res = sb.table(TABLE).insert(row).execute()
+        if not res.data:
+            raise RuntimeError(f"Insert falhou (sem data retornada). Response: {res}")
+        return res.data[0]
+    
+    log("[FALLBACK] Salvando ciclo em arquivo JSON local...")
+    cycles_file = Path("agent_cycles.json")
+    cycles = []
+    if cycles_file.exists():
+        try:
+            with open(cycles_file, 'r', encoding='utf-8') as f:
+                cycles = json.load(f)
+        except Exception as e:
+            log(f"Aviso ao ler cycles.json: {e}")
+    
+    row["id"] = len(cycles) + 1
+    cycles.append(row)
+    
+    try:
+        with open(cycles_file, 'w', encoding='utf-8') as f:
+            json.dump(cycles, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        log(f"Erro ao salvar cycles.json: {e}")
+    
+    return row
 
 
 def seconds_until_next_cycle(agent_name: str, interval_seconds: int) -> int:
