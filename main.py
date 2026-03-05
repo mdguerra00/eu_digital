@@ -16,6 +16,7 @@ from postgrest.exceptions import APIError
 from financial_module import FinancialWallet
 from tools_module import WebSearchTool, WebScraperTool, MarketAnalyzerTool, SteelBrowserTool
 from tool_executor import ToolExecutor
+from affiliate_module import AffiliateModule
 
 
 # -----------------------------
@@ -100,6 +101,7 @@ oa = OpenAI(api_key=OPENAI_API_KEY)
 
 # Inicializar módulos do agente
 wallet = FinancialWallet(wallet_file="agent_wallet.json")
+affiliate_mod = AffiliateModule(supabase_client=None, agent_name=AGENT_NAME)  # sb injetado abaixo
 search_tool = WebSearchTool(api_key=os.environ.get("PERPLEXITY_API_KEY"))
 # CORRIGIDO: Steel Browser no Railway nao precisa de API key — so precisa do endpoint.
 # Prioridade: variavel STEEL_BROWSER_ENDPOINT > URL hardcoded do Railway
@@ -118,8 +120,9 @@ steel_browser = SteelBrowserTool(
 )
 scraper_tool = WebScraperTool(steel_browser=steel_browser if steel_browser.is_configured() else None)
 print(f"[SteelBrowser] configured={steel_browser.is_configured()} | endpoint={steel_browser.endpoint}", flush=True)
+affiliate_mod.sb = sb  # injeta cliente Supabase após inicialização
 market_analyzer = MarketAnalyzerTool(search_tool, scraper_tool)
-tool_executor = ToolExecutor(search_tool, scraper_tool, market_analyzer, wallet)
+tool_executor = ToolExecutor(search_tool, scraper_tool, market_analyzer, wallet, affiliate_module=affiliate_mod)
 
 
 # -----------------------------
@@ -532,6 +535,10 @@ def update_task_prompt_from_cycle(saved_row: Dict[str, Any]) -> None:
             "mapear para cada", "preparar cronograma", "plano de divulgação",
             "estratégias personalizadas", "montar plano", "elaborar plano",
             "definir estratégia", "planejar entrada", "próximos passos",
+            "mapear canais", "perfil do público", "cronograma inicial",
+            "campanhas piloto", "validação prática", "aprofundar a análise",
+            "cruzar esses dados", "plano de entrada", "continuar a análise",
+            "continuar mapeando", "estratégia detalhada", "mapeamento completo",
         ]
         prompt_contaminado = any(b in (next_actions or "").lower() for b in BLOQUEADOS)
         prompt_generico = any(g in (next_actions or "").lower() for g in GENERICOS)
@@ -546,17 +553,21 @@ def update_task_prompt_from_cycle(saved_row: Dict[str, Any]) -> None:
                 "com nome, nicho e comissão estimada."
             )
         elif prompt_generico:
-            # Forçar ação específica e concreta no próximo ciclo
-            log("[UpdatePrompt] AVISO: next_actions genérico detectado. Forçando ação concreta.")
-            result_text = (saved_row.get(RESULT_COL) or "").strip()
+            log("[UpdatePrompt] AVISO: next_actions genérico detectado. Forçando mudança de assunto.")
+            cycle_num = saved_row.get(CYCLE_NUMBER_COL, 0)
+            # Rotaciona entre ações diferentes para evitar loop no mesmo tema
+            acoes_rotacao = [
+                'Use web_search com query "produtos mais vendidos Hotmart categoria financas investimentos 2026". Liste 3 produtos com nome, comissão e preço.',
+                'Use market_analyzer com niche="desenvolvimento pessoal produtividade". Identifique os 3 maiores players e oportunidades de entrada.',
+                'Use web_search com query "produtos digitais mais vendidos Eduzz Monetizze Brasil 2026 alta comissão". Compare com Hotmart.',
+                'Use web_search com query "nicho de pets produtos digitais afiliados Brasil 2026". Avalie potencial do nicho.',
+                'Use market_analyzer com niche="cursos online tecnologia programacao". Avalie demanda e concorrência.',
+            ]
+            acao = acoes_rotacao[int(cycle_num) % len(acoes_rotacao)]
             new_prompt = (
-                f"Os ciclos anteriores pesquisaram estratégias genéricas. "
-                f"Agora execute uma ação CONCRETA e DIFERENTE.\n\n"
-                f"Dados já coletados (use como base):\n{result_text[:400]}\n\n"
-                f"Próximo passo obrigatório: escolha UM produto ou nicho específico dos dados acima "
-                f"e pesquise com web_search dados concretos sobre ele: "
-                f"nome do produto, comissão real, link de afiliado, volume de vendas. "
-                f"NÃO repita buscas genéricas sobre estratégias ou canais."
+                f"ATENÇÃO: os últimos ciclos ficaram presos em planejamento genérico. "
+                f"IGNORE completamente os ciclos anteriores sobre 'Emagreça de Vez' e estratégias de divulgação. "
+                f"Execute AGORA esta ação específica e diferente:\n\n{acao}"
             )
         elif reflection:
             new_prompt = (
@@ -917,10 +928,15 @@ MEMÓRIA (últimos ciclos):
 {memory_summary}
 
 TOOLS DISPONÍVEIS (use APENAS estas, exatamente com estes nomes):
-- web_search        → args: {{"query": "...", "count": 5}}
-- web_scraper       → args: {{"url": "https://..."}}
-- market_analyzer   → args: {{"niche": "..."}}
+- web_search                      → args: {{"query": "...", "count": 5}}
+- web_scraper                     → args: {{"url": "https://..."}}
+- market_analyzer                 → args: {{"niche": "..."}}
 - financial_wallet.record_revenue → args: {{"amount": 0.0, "source": "...", "description": "..."}}
+- affiliate.list_links            → args: {{"niche": "saude_emagrecimento"}} (opcional)
+- affiliate.get_best              → args: {{"niche": "saude_emagrecimento"}} (opcional)
+- affiliate.generate_promo        → args: {{"niche": "saude_emagrecimento", "format": "instagram|twitter|whatsapp|email"}}
+
+PRIORIDADE DE USO: Se há links de afiliado cadastrados, USE affiliate.list_links primeiro para ver o que está disponível. Depois use affiliate.generate_promo para gerar conteúdo de divulgação real.
 
 ATENÇÃO: NÃO invente tools. NÃO use "monitor_feedback". NÃO aguarde aprovação.
 Se a memória mostra ciclos de espera, IGNORE-OS e execute a próxima ação útil agora.
