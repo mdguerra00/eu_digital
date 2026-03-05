@@ -90,7 +90,7 @@ oa = OpenAI(api_key=OPENAI_API_KEY)
 
 # Inicializar módulos do agente
 wallet = FinancialWallet(wallet_file="agent_wallet.json")
-search_tool = WebSearchTool(api_key=os.environ.get("BRAVE_SEARCH_API_KEY"))
+search_tool = WebSearchTool(api_key=os.environ.get("PERPLEXITY_API_KEY"))
 scraper_tool = WebScraperTool()
 market_analyzer = MarketAnalyzerTool(search_tool, scraper_tool)
 tool_executor = ToolExecutor(search_tool, scraper_tool, market_analyzer, wallet)
