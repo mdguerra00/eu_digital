@@ -4,6 +4,7 @@ Interpreta e executa chamadas de ferramentas baseadas no plano de ação do agen
 """
 
 import re
+import hashlib
 from typing import Dict, Any, Optional, List
 from tools_module import WebSearchTool, WebScraperTool, MarketAnalyzerTool
 from financial_module import FinancialWallet
@@ -95,6 +96,8 @@ class ToolExecutor:
             step_id = step.get("id", "step_sem_id")
             tool = step.get("tool")
             args = step.get("args") or {}
+            idempotency_payload = f"{cycle_number}:{step_id}:{tool}:{args}"
+            idempotency_key = hashlib.sha256(idempotency_payload.encode("utf-8")).hexdigest()
 
             if tool == "web_search":
                 query = (args.get("query") or "").strip()
@@ -102,6 +105,11 @@ class ToolExecutor:
                 if not query:
                     execution_result["errors"].append(f"{step_id}: query ausente")
                     continue
+                result = self._execute_web_search(query, count=count)
+                result["count_requested"] = count
+                result["step_id"] = step_id
+                result["args_input"] = args
+                result["idempotency_key"] = idempotency_key
                 result = self._execute_web_search(query)
                 result["count_requested"] = count
                 result["step_id"] = step_id
@@ -115,6 +123,8 @@ class ToolExecutor:
                     continue
                 result = self._execute_niche_analysis(niche)
                 result["step_id"] = step_id
+                result["args_input"] = args
+                result["idempotency_key"] = idempotency_key
                 execution_result["tools_executed"].append(result)
                 continue
 
@@ -125,6 +135,8 @@ class ToolExecutor:
                     continue
                 result = self._execute_scrape(url)
                 result["step_id"] = step_id
+                result["args_input"] = args
+                result["idempotency_key"] = idempotency_key
                 execution_result["tools_executed"].append(result)
                 continue
 
@@ -142,6 +154,8 @@ class ToolExecutor:
                     }
                 )
                 result["step_id"] = step_id
+                result["args_input"] = args
+                result["idempotency_key"] = idempotency_key
                 execution_result["tools_executed"].append(result)
                 continue
 
@@ -233,10 +247,10 @@ class ToolExecutor:
                 "error": str(e),
             }
     
-    def _execute_web_search(self, query: str) -> Dict[str, Any]:
+    def _execute_web_search(self, query: str, count: int = 5) -> Dict[str, Any]:
         """Executa busca web."""
         try:
-            result = self.search_tool.search(query, count=5)
+            result = self.search_tool.search(query, count=count)
             return {
                 "tool": "web_search",
                 "query": query,

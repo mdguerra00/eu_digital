@@ -531,6 +531,7 @@ def _write_execution_receipt(
     args: Dict[str, Any],
     tool_output: Dict[str, Any],
     used_fallback: bool,
+    idempotency_key: str,
 ) -> None:
     started_at = utc_now_iso()
     finished_at = utc_now_iso()
@@ -550,6 +551,7 @@ def _write_execution_receipt(
         "raw_output": tool_output,
         "evidence_hash": evidence_hash,
         "used_fallback": used_fallback,
+        "idempotency_key": idempotency_key,
     }
 
     if sb is not None:
@@ -559,6 +561,43 @@ def _write_execution_receipt(
     receipts_file = Path("execution_receipts.jsonl")
     with open(receipts_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(receipt, ensure_ascii=False) + "\n")
+
+
+def _receipt_already_exists(idempotency_key: str) -> bool:
+    if sb is not None:
+        try:
+            res = (
+                sb.table(RECEIPTS_TABLE)
+                .select("id")
+                .eq("idempotency_key", idempotency_key)
+                .limit(1)
+                .execute()
+            )
+            return bool(res.data)
+        except Exception as e:
+            log("Aviso: falha ao consultar receipt por idempotency_key:", repr(e))
+            return False
+
+    receipts_file = Path("execution_receipts.jsonl")
+    if not receipts_file.exists():
+        return False
+
+    try:
+        with open(receipts_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if row.get("idempotency_key") == idempotency_key:
+                    return True
+    except Exception as e:
+        log("Aviso: falha ao ler execution_receipts.jsonl:", repr(e))
+
+    return False
 
 
 # -----------------------------
@@ -771,6 +810,27 @@ def run_once(run_id: str) -> Dict[str, Any]:
         log(f"Ferramentas executadas: {len(tool_execution['tools_executed'])}")
         for tool_result in tool_execution['tools_executed']:
             log(f"  - {tool_result.get('tool')}: {tool_result.get('success')}")
+            idempotency_key = (
+                tool_result.get("idempotency_key")
+                or hashlib.sha256(
+                    f"{run_id}:{cycle_number}:{tool_result.get('step_id') or tool_result.get('tool')}".encode("utf-8")
+                ).hexdigest()
+            )
+
+            if _receipt_already_exists(idempotency_key):
+                log(f"  - receipt já existe para idempotency_key={idempotency_key[:12]}..., pulando gravação")
+            else:
+                _write_execution_receipt(
+                    run_id=run_id,
+                    cycle_number=cycle_number,
+                    step_id=tool_result.get("step_id") or tool_result.get("tool") or "unknown_step",
+                    tool=tool_result.get("tool") or "unknown_tool",
+                    args=tool_result.get("args_input") or {},
+                    tool_output=tool_result,
+                    used_fallback=bool(tool_result.get("used_fallback", False)),
+                    idempotency_key=idempotency_key,
+                )
+
             _write_execution_receipt(
                 run_id=run_id,
                 cycle_number=cycle_number,
