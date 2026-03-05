@@ -589,6 +589,12 @@ def validate_against_statute(next_actions: str, reflection: str, cycle_number: i
 
 
 def _validate_execution_plan(plan: Any) -> tuple[bool, str]:
+    if isinstance(plan, str):
+        try:
+            plan = json.loads(plan)
+        except Exception:
+            return False, "execution_plan em texto, mas não é JSON válido"
+
     if not isinstance(plan, list) or not plan:
         return False, "execution_plan ausente ou vazio"
 
@@ -607,6 +613,20 @@ def _validate_execution_plan(plan: Any) -> tuple[bool, str]:
             return False, f"step #{i} sem campo obrigatório: on_failure"
 
     return True, "execution_plan válido"
+
+
+def _normalize_execution_plan(plan: Any) -> List[Dict[str, Any]]:
+    """Converte execution_plan para uma lista de steps quando possível."""
+    if isinstance(plan, str):
+        try:
+            plan = json.loads(plan)
+        except Exception:
+            return []
+
+    if not isinstance(plan, list):
+        return []
+
+    return [step for step in plan if isinstance(step, dict)]
 
 
 def _write_execution_receipt(
@@ -814,7 +834,7 @@ Entregue JSON puro no formato:
     else:
         log(f"GUARDRAIL OK: {validation_msg}")
 
-    execution_plan = data.get("execution_plan")
+    execution_plan = _normalize_execution_plan(data.get("execution_plan"))
     is_plan_valid, plan_msg = _validate_execution_plan(execution_plan)
 
     if AGENT_MODE == "real" and not is_plan_valid:
