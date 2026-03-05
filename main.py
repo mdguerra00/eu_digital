@@ -5,6 +5,7 @@ import time
 import traceback
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 from supabase import create_client, Client
 from openai import OpenAI
@@ -51,6 +52,17 @@ AGENT_NAME_COL = os.environ.get("AGENT_NAME_COL", "agent_name")
 RUN_ID_COL = os.environ.get("RUN_ID_COL", "run_id")
 CYCLE_NUMBER_COL = os.environ.get("CYCLE_NUMBER_COL", "cycle_number")
 FOCUS_COL = os.environ.get("FOCUS_COL", "focus")
+
+# --- Carregamento do Estatuto ---
+ESTATUTO_PATH = Path(__file__).parent / "ESTATUTO.md"
+ESTATUTO_CONTENT = ""
+if ESTATUTO_PATH.exists():
+    try:
+        ESTATUTO_CONTENT = ESTATUTO_PATH.read_text(encoding="utf-8")
+    except Exception as e:
+        print(f"Aviso: falha ao carregar ESTATUTO.md: {e}")
+else:
+    print(f"Aviso: arquivo ESTATUTO.md não encontrado em {ESTATUTO_PATH}")
 
 
 # -----------------------------
@@ -312,6 +324,43 @@ def update_task_prompt_from_cycle(saved_row: Dict[str, Any]) -> None:
 
 
 # -----------------------------
+# Guardrail Validation (Validador de Estatuto)
+# -----------------------------
+def validate_against_statute(next_actions: str, reflection: str, cycle_number: int) -> tuple:
+    """
+    Valida se as acoes propostas estao em conformidade com os Principios Inquebraveis do Estatuto.
+    Retorna (is_valid, validation_message).
+    """
+    next_actions_lower = (next_actions or "").lower()
+    
+    # Verificacao 1: Proibicao de produtos fisicos
+    physical_keywords = ["comprar", "entregar", "estoque", "mercadoria", "físico"]
+    for keyword in physical_keywords:
+        if keyword in next_actions_lower:
+            return False, f"VIOLACAO DO ESTATUTO (Secao 1): Acao propoe trabalhar com produtos fisicos. Acao rejeitada: {next_actions[:100]}..."
+    
+    # Verificacao 2: Proibicao de movimentar dinheiro do Criador
+    money_keywords = ["usar dinheiro do criador", "dinheiro do criador", "investir capital do criador", "gastar conta do marcelo", "movimentar conta pessoal"]
+    for keyword in money_keywords:
+        if keyword in next_actions_lower:
+            return False, f"VIOLACAO DO ESTATUTO (Secao 4): Acao propoe movimentar dinheiro do Criador sem aprovacao. Acao rejeitada: {next_actions[:100]}..."
+    
+    # Verificacao 3: Proibicao de alterar o Estatuto unilateralmente
+    statute_keywords = ["alterar estatuto", "modificar estatuto", "mudar regras do estatuto", "editar constituicao", "aumentar minha porcentagem"]
+    for keyword in statute_keywords:
+        if keyword in next_actions_lower:
+            return False, f"VIOLACAO DO ESTATUTO (Secao 4): Acao propoe alterar o Estatuto sem aprovacao do Criador. Acao rejeitada: {next_actions[:100]}..."
+    
+    # Verificacao 4: Proibicao de atividades ilegais ou antieticas
+    illegal_keywords = ["fraude", "spam", "pirataria", "sonegacao", "lavagem de dinheiro", "enganar cliente", "burlar regras"]
+    for keyword in illegal_keywords:
+        if keyword in next_actions_lower:
+            return False, f"VIOLACAO DO ESTATUTO (Secao 2 - Principios Inquebraveis): Acao propoe atividade ilegal ou antietica. Acao rejeitada: {next_actions[:100]}..."
+    
+    return True, "Acoes validadas com sucesso contra o Estatuto Constitucional."
+
+
+# -----------------------------
 # LLM helpers
 # -----------------------------
 def _extract_json(text: str) -> Dict[str, Any]:
@@ -328,6 +377,19 @@ def _extract_json(text: str) -> Dict[str, Any]:
 
 
 def llm_cycle(memory_summary: str, focus: str, task_prompt: str, cycle_number: int) -> Dict[str, str]:
+    # Construir o system prompt com o Estatuto integrado
+    statute_section = ""
+    if ESTATUTO_CONTENT:
+        statute_section = f"""
+
+=== ESTATUTO CONSTITUCIONAL (Sua Constituição) ===
+{ESTATUTO_CONTENT}
+=== FIM DO ESTATUTO ===
+
+Todas as suas decisões, planos e ações devem estar 100% alinhados com este Estatuto.
+Em caso de conflito, priorize sempre os Princípios Inquebráveis (Seção 2).
+"""
+    
     system = (
         "Você é um agente autônomo que evolui por ciclos. "
         "A cada ciclo, você deve: "
@@ -336,6 +398,7 @@ def llm_cycle(memory_summary: str, focus: str, task_prompt: str, cycle_number: i
         "(3) definir próximos passos. "
         "Seja específico, conciso e incremental. "
         "Não reescreva tudo do zero."
+        + statute_section
     )
 
     user = f"""
@@ -380,6 +443,15 @@ Entregue JSON puro no formato:
         reflection = "Sem reflection (fallback): o modelo não retornou conteúdo."
     if not next_actions:
         next_actions = "Sem next_actions (fallback): o modelo não retornou conteúdo."
+    
+    # Validar contra o Estatuto antes de retornar
+    is_valid, validation_msg = validate_against_statute(next_actions, reflection, cycle_number)
+    if not is_valid:
+        log(f"GUARDRAIL ACIONADO: {validation_msg}")
+        # Se houver violação, registrar e sugerir reformulação
+        next_actions = f"[GUARDRAIL] {validation_msg}\n\nPor favor, reformule as próximas ações para estar em conformidade com o Estatuto."
+    else:
+        log(f"GUARDRAIL OK: {validation_msg}")
 
     return {
         "result_text": result_text,
@@ -495,3 +567,6 @@ def main_loop() -> None:
 
 if __name__ == "__main__":
     main_loop()
+
+
+
