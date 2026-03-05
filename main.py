@@ -251,10 +251,26 @@ def summarize_memory(cycles: List[Dict[str, Any]]) -> str:
 
 def get_next_cycle_number(agent_name: str) -> int:
     if sb is None:
-        last_cycle = fetch_last_cycle(agent_name)
-        if last_cycle and last_cycle.get(CYCLE_NUMBER_COL) is not None:
-            return int(last_cycle[CYCLE_NUMBER_COL]) + 1
-        return 1
+        cycles_file = Path("agent_cycles.json")
+        if not cycles_file.exists():
+            return 1
+
+        try:
+            with open(cycles_file, "r", encoding="utf-8") as f:
+                cycles = json.load(f)
+
+            filtered_cycles = [
+                c for c in cycles
+                if c.get(AGENT_NAME_COL) == agent_name and c.get(CYCLE_NUMBER_COL) is not None
+            ]
+            if not filtered_cycles:
+                return 1
+
+            max_cycle = max(int(c[CYCLE_NUMBER_COL]) for c in filtered_cycles)
+            return max_cycle + 1
+        except Exception as e:
+            log(f"Aviso: falha ao calcular próximo ciclo via agent_cycles.json: {e}")
+            return 1
 
     res = (
         sb.table(TABLE)
@@ -342,32 +358,7 @@ def get_current_task_prompt() -> str:
     fallback = TASK_PROMPT_ENV or "Rodar um ciclo de reflexão e auto-aprimoramento do agente (default)"
 
     if sb is None:
-        state_file = Path("agent_state.json")
-        if state_file.exists():
-            try:
-                with open(state_file, "r", encoding="utf-8") as f:
-                    state_data = json.load(f)
-                p = (state_data.get("current_task_prompt") or "").strip()
-                return p or fallback
-            except Exception as e:
-                log("Aviso: falha ao ler agent_state.json, usando fallback. Erro:", repr(e))
-
-        try:
-            with open(state_file, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "agent_name": AGENT_NAME,
-                        "current_task_prompt": fallback,
-                        "updated_at": utc_now_iso(),
-                    },
-                    f,
-                    indent=2,
-                    ensure_ascii=False,
-                )
-        except Exception as e:
-            log("Aviso: falha ao criar agent_state.json. Erro:", repr(e))
-
-        return fallback
+        return _get_local_state_prompt(fallback)
 
     try:
         res = (
@@ -424,23 +415,45 @@ def update_task_prompt_from_cycle(saved_row: Dict[str, Any]) -> None:
                 "updated_at": utc_now_iso(),
             }).execute()
         else:
-            state_file = Path("agent_state.json")
-            with open(state_file, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "agent_name": AGENT_NAME,
-                        "current_task_prompt": new_prompt,
-                        "updated_at": utc_now_iso(),
-                    },
-                    f,
-                    indent=2,
-                    ensure_ascii=False,
-                )
+            _write_local_state_prompt(new_prompt)
 
         log("Agent state atualizado: current_task_prompt definido a partir do último ciclo.")
 
     except Exception as e:
         log("Aviso: falha ao atualizar agent_state (não bloqueia). Erro:", repr(e))
+
+
+def _get_local_state_prompt(fallback_prompt: str) -> str:
+    state_file = Path("agent_state.json")
+    if state_file.exists():
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                state_data = json.load(f)
+            prompt = (state_data.get("current_task_prompt") or "").strip()
+            return prompt or fallback_prompt
+        except Exception as e:
+            log("Aviso: falha ao ler agent_state.json, usando fallback. Erro:", repr(e))
+
+    _write_local_state_prompt(fallback_prompt)
+    return fallback_prompt
+
+
+def _write_local_state_prompt(prompt: str) -> None:
+    state_file = Path("agent_state.json")
+    try:
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "agent_name": AGENT_NAME,
+                    "current_task_prompt": prompt,
+                    "updated_at": utc_now_iso(),
+                },
+                f,
+                indent=2,
+                ensure_ascii=False,
+            )
+    except Exception as e:
+        log("Aviso: falha ao persistir agent_state.json. Erro:", repr(e))
 
 
 # -----------------------------
@@ -725,5 +738,4 @@ def main_loop() -> None:
 
 if __name__ == "__main__":
     main_loop()
-
 
