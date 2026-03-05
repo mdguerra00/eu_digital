@@ -1054,36 +1054,47 @@ def run_once(run_id: str) -> Dict[str, Any]:
             success = tool_result.get("success", False)
             log(f"  - {tool_name}: success={success}")
 
-            # Resumo legível do resultado para salvar no ciclo
+            # Resumo rico do resultado — preserva o maximo de dados reais
             if tool_name == "web_search" and success:
-                raw_answer = tool_result.get("raw_answer", "")
-                previews = tool_result.get("results_preview", [])
-                part = f"[web_search: '{tool_result.get('query','')}'] "
+                query_str = tool_result.get("query", "")
+                raw_answer = (tool_result.get("raw_answer") or "").strip()
+                descriptions = tool_result.get("descriptions", [])
+                urls = tool_result.get("all_urls", [])
+                enrich = tool_result.get("enrichment_scrape") or {}
+                enrich_text = (enrich.get("text") or "").strip()
+
+                part = f"[web_search: {query_str!r}]\n"
                 if raw_answer:
-                    part += raw_answer[:600]
-                elif previews:
-                    part += " | ".join(previews[:3])
-                summary_parts.append(part)
+                    part += f"Resposta Perplexity:\n{raw_answer[:1200]}\n"
+                if descriptions:
+                    part += "Snippets: " + " | ".join(d[:120] for d in descriptions[:3]) + "\n"
+                if urls:
+                    part += "URLs: " + " | ".join(urls[:3]) + "\n"
+                if enrich_text:
+                    part += f"Conteudo scraping ({enrich.get('url','')}):\n{enrich_text[:600]}\n"
+                summary_parts.append(part.strip())
 
             elif tool_name == "market_analyzer" and success:
-                opps = tool_result.get("opportunities", [])
                 niche = tool_result.get("niche", "")
-                search_data = tool_result.get("search_results", {})
-                part = f"[market_analyzer: '{niche}'] "
-                # Incluir raw_answer da busca interna se disponível
-                if isinstance(search_data, dict):
-                    raw = search_data.get("raw_answer", "")
-                    if raw:
-                        part += raw[:600]
-                    else:
-                        part += " | ".join(opps[:4])
-                else:
-                    part += " | ".join(opps[:4])
-                summary_parts.append(part)
+                search_data = tool_result.get("search_results") or {}
+                raw = (search_data.get("raw_answer") or "").strip()
+                opps = tool_result.get("opportunities", [])
+                competitors = tool_result.get("competitor_analysis", [])
+
+                part = f"[market_analyzer: {niche!r}]\n"
+                if raw:
+                    part += f"Analise Perplexity:\n{raw[:1200]}\n"
+                if opps:
+                    part += "Oportunidades: " + " | ".join(opps[:4]) + "\n"
+                if competitors:
+                    for c in competitors[:2]:
+                        part += f"Concorrente {c.get('url','')}: {(c.get('text_preview') or '')[:200]}\n"
+                summary_parts.append(part.strip())
 
             elif tool_name == "web_scraper" and success:
-                text = tool_result.get("text", "") or tool_result.get("title", "")
-                summary_parts.append(f"[web_scraper: '{tool_result.get('url','')}'] {text[:400]}")
+                url = tool_result.get("url", "")
+                text = (tool_result.get("text") or tool_result.get("title") or "").strip()
+                summary_parts.append(f"[web_scraper: {url!r}]\n{text[:800]}")
 
             elif not success:
                 summary_parts.append(f"[{tool_name}: ERRO] {tool_result.get('error','desconhecido')}")
