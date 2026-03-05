@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from tools_module import WebSearchTool, WebScraperTool, MarketAnalyzerTool
 from financial_module import FinancialWallet
+from affiliate_module import AffiliateModule, execute_affiliate_action
 
 
 class ToolExecutor:
@@ -17,12 +18,14 @@ class ToolExecutor:
     Interpreta o plano de ação do agente e executa as ferramentas apropriadas.
     """
     
-    def __init__(self, search_tool: WebSearchTool, scraper_tool: WebScraperTool, 
-                 market_analyzer: MarketAnalyzerTool, wallet: FinancialWallet):
+    def __init__(self, search_tool: WebSearchTool, scraper_tool: WebScraperTool,
+                 market_analyzer: MarketAnalyzerTool, wallet: FinancialWallet,
+                 affiliate_module=None):
         self.search_tool = search_tool
         self.scraper_tool = scraper_tool
         self.market_analyzer = market_analyzer
         self.wallet = wallet
+        self.affiliate_module = affiliate_module
         self.execution_history = []
         self.feedback_file = Path("creator_feedback.json")
     
