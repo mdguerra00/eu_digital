@@ -72,6 +72,28 @@ class MockTable:
         # Para o teste, apenas simulamos uma atualização bem-sucedida
         self._update_row = row
         return self
+
+    def upsert(self, row):
+        existing_idx = None
+        agent_name = row.get("agent_name")
+        for i, current in enumerate(self.data[self.table_name]):
+            if current.get("agent_name") == agent_name:
+                existing_idx = i
+                break
+
+        if existing_idx is not None:
+            updated = dict(self.data[self.table_name][existing_idx])
+            updated.update(row)
+            self.data[self.table_name][existing_idx] = updated
+            self._upsert_row = updated
+        else:
+            row = dict(row)
+            row["id"] = len(self.data[self.table_name]) + 1
+            row.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+            self.data[self.table_name].append(row)
+            self._upsert_row = row
+
+        return self
     
     def execute(self):
         # Filtrar dados
@@ -133,7 +155,7 @@ def run_test_flight():
     print("="*70)
     
     # Importar após patches
-    sys.path.insert(0, '/home/ubuntu/eu_digital')
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     
     # Patch do Supabase e Perplexity Search
     with patch('supabase.create_client', mock_create_client):

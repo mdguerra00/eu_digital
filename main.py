@@ -250,6 +250,12 @@ def summarize_memory(cycles: List[Dict[str, Any]]) -> str:
 
 
 def get_next_cycle_number(agent_name: str) -> int:
+    if sb is None:
+        last_cycle = fetch_last_cycle(agent_name)
+        if last_cycle and last_cycle.get(CYCLE_NUMBER_COL) is not None:
+            return int(last_cycle[CYCLE_NUMBER_COL]) + 1
+        return 1
+
     res = (
         sb.table(TABLE)
         .select(CYCLE_NUMBER_COL)
@@ -335,6 +341,34 @@ def get_current_task_prompt() -> str:
     """
     fallback = TASK_PROMPT_ENV or "Rodar um ciclo de reflexão e auto-aprimoramento do agente (default)"
 
+    if sb is None:
+        state_file = Path("agent_state.json")
+        if state_file.exists():
+            try:
+                with open(state_file, "r", encoding="utf-8") as f:
+                    state_data = json.load(f)
+                p = (state_data.get("current_task_prompt") or "").strip()
+                return p or fallback
+            except Exception as e:
+                log("Aviso: falha ao ler agent_state.json, usando fallback. Erro:", repr(e))
+
+        try:
+            with open(state_file, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "agent_name": AGENT_NAME,
+                        "current_task_prompt": fallback,
+                        "updated_at": utc_now_iso(),
+                    },
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+        except Exception as e:
+            log("Aviso: falha ao criar agent_state.json. Erro:", repr(e))
+
+        return fallback
+
     try:
         res = (
             sb.table(STATE_TABLE)
@@ -382,12 +416,26 @@ def update_task_prompt_from_cycle(saved_row: Dict[str, Any]) -> None:
                 f"Agora execute o próximo passo mais importante primeiro, com entregáveis claros."
             )
 
-        # Upsert (update se existe; insert se não existe)
-        sb.table(STATE_TABLE).upsert({
-            "agent_name": AGENT_NAME,
-            "current_task_prompt": new_prompt,
-            "updated_at": utc_now_iso(),
-        }).execute()
+        if sb is not None:
+            # Upsert (update se existe; insert se não existe)
+            sb.table(STATE_TABLE).upsert({
+                "agent_name": AGENT_NAME,
+                "current_task_prompt": new_prompt,
+                "updated_at": utc_now_iso(),
+            }).execute()
+        else:
+            state_file = Path("agent_state.json")
+            with open(state_file, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "agent_name": AGENT_NAME,
+                        "current_task_prompt": new_prompt,
+                        "updated_at": utc_now_iso(),
+                    },
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
 
         log("Agent state atualizado: current_task_prompt definido a partir do último ciclo.")
 
@@ -492,17 +540,42 @@ Entregue JSON puro no formato:
 }}
 """
 
-    resp = oa.chat.completions.create(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=TEMPERATURE,
-        timeout=REQUEST_TIMEOUT_S,
-    )
+    content = ""
 
-    content = (resp.choices[0].message.content or "").strip()
+    # Compatibilidade entre versões do SDK/OpenAI API (Chat Completions x Responses)
+    try:
+        resp = oa.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=TEMPERATURE,
+            timeout=REQUEST_TIMEOUT_S,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+    except Exception as first_error:
+        try:
+            resp = oa.responses.create(
+                model=MODEL,
+                input=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                temperature=TEMPERATURE,
+                timeout=REQUEST_TIMEOUT_S,
+            )
+            content = (getattr(resp, "output_text", "") or "").strip()
+            if not content:
+                parts = []
+                for item in getattr(resp, "output", []) or []:
+                    for c in getattr(item, "content", []) or []:
+                        t = getattr(c, "text", None)
+                        if t:
+                            parts.append(t)
+                content = "\n".join(parts).strip()
+        except Exception:
+            raise first_error
     data = _extract_json(content)
 
     result_text = (data.get("result_text") or "").strip()
@@ -652,6 +725,5 @@ def main_loop() -> None:
 
 if __name__ == "__main__":
     main_loop()
-
 
 
