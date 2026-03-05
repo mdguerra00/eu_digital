@@ -100,11 +100,23 @@ oa = OpenAI(api_key=OPENAI_API_KEY)
 # Inicializar módulos do agente
 wallet = FinancialWallet(wallet_file="agent_wallet.json")
 search_tool = WebSearchTool(api_key=os.environ.get("PERPLEXITY_API_KEY"))
+# CORRIGIDO: Steel Browser no Railway nao precisa de API key — so precisa do endpoint.
+# Prioridade: variavel STEEL_BROWSER_ENDPOINT > URL hardcoded do Railway
+# STEEL BROWSER — mesmo projeto Railway = usar URL interna (mais rapido, sem passar pela internet)
+# Prioridade:
+#   1) STEEL_BROWSER_ENDPOINT (variavel no Railway — recomendado)
+#   2) URL interna Railway  http://steel-browser.railway.internal/scrape
+#   3) URL publica como ultimo fallback
+_steel_endpoint = os.environ.get(
+    "STEEL_BROWSER_ENDPOINT",
+    "http://steel-browser.railway.internal/scrape"  # URL interna — mesmo projeto Railway
+)
 steel_browser = SteelBrowserTool(
-    api_key=os.environ.get("STEEL_BROWSER_API_KEY"),
-    endpoint=os.environ.get("STEEL_BROWSER_ENDPOINT"),
+    api_key=os.environ.get("STEEL_BROWSER_API_KEY"),  # opcional, pode ser None
+    endpoint=_steel_endpoint,
 )
 scraper_tool = WebScraperTool(steel_browser=steel_browser if steel_browser.is_configured() else None)
+log(f"[SteelBrowser] configured={steel_browser.is_configured()} | endpoint={steel_browser.endpoint}")
 market_analyzer = MarketAnalyzerTool(search_tool, scraper_tool)
 tool_executor = ToolExecutor(search_tool, scraper_tool, market_analyzer, wallet)
 
