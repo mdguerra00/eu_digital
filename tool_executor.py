@@ -4,7 +4,8 @@ Interpreta e executa chamadas de ferramentas baseadas no plano de ação do agen
 """
 
 import re
-from typing import Dict, Any, Optional
+import hashlib
+from typing import Dict, Any, Optional, List
 from tools_module import WebSearchTool, WebScraperTool, MarketAnalyzerTool
 from financial_module import FinancialWallet
 
@@ -78,6 +79,88 @@ class ToolExecutor:
             insights = self._generate_insights(execution_result["tools_executed"])
             execution_result["insights"] = insights
         
+        self.execution_history.append(execution_result)
+        return execution_result
+
+    def execute_plan(self, plan: List[Dict[str, Any]], cycle_number: int) -> Dict[str, Any]:
+        """Executa um plano estruturado com steps explícitos."""
+        execution_result = {
+            "cycle_number": cycle_number,
+            "actions_input": "[structured_plan]",
+            "tools_executed": [],
+            "insights": [],
+            "errors": [],
+        }
+
+        for step in plan:
+            step_id = step.get("id", "step_sem_id")
+            tool = step.get("tool")
+            args = step.get("args") or {}
+            idempotency_payload = f"{cycle_number}:{step_id}:{tool}:{args}"
+            idempotency_key = hashlib.sha256(idempotency_payload.encode("utf-8")).hexdigest()
+
+            if tool == "web_search":
+                query = (args.get("query") or "").strip()
+                count = int(args.get("count", 5))
+                if not query:
+                    execution_result["errors"].append(f"{step_id}: query ausente")
+                    continue
+                result = self._execute_web_search(query, count=count)
+                result["count_requested"] = count
+                result["step_id"] = step_id
+                result["args_input"] = args
+                result["idempotency_key"] = idempotency_key
+                execution_result["tools_executed"].append(result)
+                continue
+
+            if tool == "market_analyzer":
+                niche = (args.get("niche") or "").strip()
+                if not niche:
+                    execution_result["errors"].append(f"{step_id}: niche ausente")
+                    continue
+                result = self._execute_niche_analysis(niche)
+                result["step_id"] = step_id
+                result["args_input"] = args
+                result["idempotency_key"] = idempotency_key
+                execution_result["tools_executed"].append(result)
+                continue
+
+            if tool == "web_scraper":
+                url = (args.get("url") or "").strip()
+                if not url:
+                    execution_result["errors"].append(f"{step_id}: url ausente")
+                    continue
+                result = self._execute_scrape(url)
+                result["step_id"] = step_id
+                result["args_input"] = args
+                result["idempotency_key"] = idempotency_key
+                execution_result["tools_executed"].append(result)
+                continue
+
+            if tool == "financial_wallet.record_revenue":
+                amount = float(args.get("amount", 0))
+                source = (args.get("source") or "desconhecido").strip()
+                if amount <= 0:
+                    execution_result["errors"].append(f"{step_id}: amount inválido")
+                    continue
+                result = self._execute_record_revenue(
+                    {
+                        "amount": amount,
+                        "source": source,
+                        "description": (args.get("description") or "Receita via plano estruturado").strip(),
+                    }
+                )
+                result["step_id"] = step_id
+                result["args_input"] = args
+                result["idempotency_key"] = idempotency_key
+                execution_result["tools_executed"].append(result)
+                continue
+
+            execution_result["errors"].append(f"{step_id}: tool não suportada ({tool})")
+
+        if execution_result["tools_executed"]:
+            execution_result["insights"] = self._generate_insights(execution_result["tools_executed"])
+
         self.execution_history.append(execution_result)
         return execution_result
     
@@ -161,10 +244,10 @@ class ToolExecutor:
                 "error": str(e),
             }
     
-    def _execute_web_search(self, query: str) -> Dict[str, Any]:
+    def _execute_web_search(self, query: str, count: int = 5) -> Dict[str, Any]:
         """Executa busca web."""
         try:
-            result = self.search_tool.search(query, count=5)
+            result = self.search_tool.search(query, count=count)
             return {
                 "tool": "web_search",
                 "query": query,

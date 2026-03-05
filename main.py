@@ -2,6 +2,7 @@ import os
 import uuid
 import json
 import time
+import hashlib
 import traceback
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
@@ -40,6 +41,7 @@ TASK_PROMPT_ENV = os.environ.get("TASK_PROMPT", "").strip()
 
 MEMORY_WINDOW = int(os.environ.get("MEMORY_WINDOW", "10"))
 MODEL = os.environ.get("MODEL", "gpt-4.1-mini")
+AGENT_MODE = os.environ.get("AGENT_MODE", "simulation").strip().lower()
 
 TEMPERATURE = float(os.environ.get("TEMPERATURE", "0.4"))
 REQUEST_TIMEOUT_S = float(os.environ.get("REQUEST_TIMEOUT_S", "60"))
@@ -56,12 +58,14 @@ RESULT_COL = os.environ.get("RESULT_COL", "result_text")
 TASK_PROMPT_COL = os.environ.get("TASK_PROMPT_COL", "task_prompt")
 REFLECTION_COL = os.environ.get("REFLECTION_COL", "reflection")
 NEXT_ACTIONS_COL = os.environ.get("NEXT_ACTIONS_COL", "next_actions")
+PLAN_COL = os.environ.get("PLAN_COL", "execution_plan")
 
 CREATED_AT_COL = os.environ.get("CREATED_AT_COL", "created_at")
 AGENT_NAME_COL = os.environ.get("AGENT_NAME_COL", "agent_name")
 RUN_ID_COL = os.environ.get("RUN_ID_COL", "run_id")
 CYCLE_NUMBER_COL = os.environ.get("CYCLE_NUMBER_COL", "cycle_number")
 FOCUS_COL = os.environ.get("FOCUS_COL", "focus")
+RECEIPTS_TABLE = os.environ.get("EXECUTION_RECEIPTS_TABLE", "execution_receipts")
 
 # --- Carregamento do Estatuto ---
 ESTATUTO_PATH = Path(__file__).parent / "ESTATUTO.md"
@@ -497,6 +501,105 @@ def validate_against_statute(next_actions: str, reflection: str, cycle_number: i
     return True, "Acoes validadas com sucesso contra o Estatuto Constitucional."
 
 
+def _validate_execution_plan(plan: Any) -> tuple[bool, str]:
+    if not isinstance(plan, list) or not plan:
+        return False, "execution_plan ausente ou vazio"
+
+    for i, step in enumerate(plan, start=1):
+        if not isinstance(step, dict):
+            return False, f"step #{i} inválido (esperado objeto)"
+        if not step.get("id"):
+            return False, f"step #{i} sem campo obrigatório: id"
+        if not step.get("tool"):
+            return False, f"step #{i} sem campo obrigatório: tool"
+        if not isinstance(step.get("args"), dict):
+            return False, f"step #{i} sem campo obrigatório: args (objeto)"
+        if not step.get("success_criteria"):
+            return False, f"step #{i} sem campo obrigatório: success_criteria"
+        if not step.get("on_failure"):
+            return False, f"step #{i} sem campo obrigatório: on_failure"
+
+    return True, "execution_plan válido"
+
+
+def _write_execution_receipt(
+    *,
+    run_id: str,
+    cycle_number: int,
+    step_id: str,
+    tool: str,
+    args: Dict[str, Any],
+    tool_output: Dict[str, Any],
+    used_fallback: bool,
+    idempotency_key: str,
+) -> None:
+    started_at = utc_now_iso()
+    finished_at = utc_now_iso()
+    status = "success" if tool_output.get("success") else "failed"
+    raw_output = json.dumps(tool_output, ensure_ascii=False)
+    evidence_hash = hashlib.sha256(raw_output.encode("utf-8")).hexdigest()
+
+    receipt = {
+        "run_id": run_id,
+        "cycle_number": cycle_number,
+        "step_id": step_id,
+        "tool": tool,
+        "args": args,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "status": status,
+        "raw_output": tool_output,
+        "evidence_hash": evidence_hash,
+        "used_fallback": used_fallback,
+        "idempotency_key": idempotency_key,
+    }
+
+    if sb is not None:
+        sb.table(RECEIPTS_TABLE).insert(receipt).execute()
+        return
+
+    receipts_file = Path("execution_receipts.jsonl")
+    with open(receipts_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(receipt, ensure_ascii=False) + "\n")
+
+
+def _receipt_already_exists(idempotency_key: str) -> bool:
+    if sb is not None:
+        try:
+            res = (
+                sb.table(RECEIPTS_TABLE)
+                .select("id")
+                .eq("idempotency_key", idempotency_key)
+                .limit(1)
+                .execute()
+            )
+            return bool(res.data)
+        except Exception as e:
+            log("Aviso: falha ao consultar receipt por idempotency_key:", repr(e))
+            return False
+
+    receipts_file = Path("execution_receipts.jsonl")
+    if not receipts_file.exists():
+        return False
+
+    try:
+        with open(receipts_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if row.get("idempotency_key") == idempotency_key:
+                    return True
+    except Exception as e:
+        log("Aviso: falha ao ler execution_receipts.jsonl:", repr(e))
+
+    return False
+
+
 # -----------------------------
 # LLM helpers
 # -----------------------------
@@ -513,7 +616,7 @@ def _extract_json(text: str) -> Dict[str, Any]:
         return json.loads(text[start:end + 1])
 
 
-def llm_cycle(memory_summary: str, focus: str, task_prompt: str, cycle_number: int) -> Dict[str, str]:
+def llm_cycle(memory_summary: str, focus: str, task_prompt: str, cycle_number: int) -> Dict[str, Any]:
     # Construir o system prompt com o Estatuto integrado
     statute_section = ""
     if ESTATUTO_CONTENT:
@@ -553,7 +656,16 @@ Entregue JSON puro no formato:
 {{
   "result_text": "...",
   "reflection": "...",
-  "next_actions": "..."
+  "next_actions": "...",
+  "execution_plan": [
+    {{
+      "id": "step_1",
+      "tool": "web_search|web_scraper|market_analyzer|financial_wallet.record_revenue",
+      "args": {{}},
+      "success_criteria": "...",
+      "on_failure": "retry_once|skip|halt"
+    }}
+  ]
 }}
 """
 
@@ -615,10 +727,21 @@ Entregue JSON puro no formato:
     else:
         log(f"GUARDRAIL OK: {validation_msg}")
 
+    execution_plan = data.get("execution_plan")
+    is_plan_valid, plan_msg = _validate_execution_plan(execution_plan)
+
+    if AGENT_MODE == "real" and not is_plan_valid:
+        raise RuntimeError(f"AGENT_MODE=real exige execution_plan válido. Erro: {plan_msg}")
+
+    if AGENT_MODE != "real" and not is_plan_valid:
+        log(f"Aviso: execution_plan inválido/ausente em simulation: {plan_msg}")
+        execution_plan = []
+
     return {
         "result_text": result_text,
         "reflection": reflection,
         "next_actions": next_actions,
+        "execution_plan": execution_plan,
     }
 
 
@@ -659,6 +782,7 @@ def run_once(run_id: str) -> Dict[str, Any]:
         RESULT_COL: llm_out["result_text"],
         REFLECTION_COL: llm_out["reflection"],
         NEXT_ACTIONS_COL: llm_out["next_actions"],
+        PLAN_COL: llm_out.get("execution_plan", []),
     }
 
     saved = write_cycle(row)
@@ -673,12 +797,44 @@ def run_once(run_id: str) -> Dict[str, Any]:
     # NOVO (não bloqueia): atualiza prompt do próximo ciclo
     update_task_prompt_from_cycle(saved)
     
-    # Executar ferramentas baseado nas próximas ações
+    # Executar ferramentas (prioriza plano estruturado)
     try:
-        tool_execution = tool_executor.execute_tools(llm_out["next_actions"], cycle_number)
+        execution_plan = llm_out.get("execution_plan") or []
+        if execution_plan:
+            tool_execution = tool_executor.execute_plan(execution_plan, cycle_number)
+        else:
+            if AGENT_MODE == "real":
+                raise RuntimeError("AGENT_MODE=real não permite execução sem execution_plan.")
+            tool_execution = tool_executor.execute_tools(llm_out["next_actions"], cycle_number)
+
         log(f"Ferramentas executadas: {len(tool_execution['tools_executed'])}")
         for tool_result in tool_execution['tools_executed']:
             log(f"  - {tool_result.get('tool')}: {tool_result.get('success')}")
+            idempotency_key = (
+                tool_result.get("idempotency_key")
+                or hashlib.sha256(
+                    f"{run_id}:{cycle_number}:{tool_result.get('step_id') or tool_result.get('tool')}".encode("utf-8")
+                ).hexdigest()
+            )
+
+            if _receipt_already_exists(idempotency_key):
+                log(f"  - receipt já existe para idempotency_key={idempotency_key[:12]}..., pulando gravação")
+            else:
+                _write_execution_receipt(
+                    run_id=run_id,
+                    cycle_number=cycle_number,
+                    step_id=tool_result.get("step_id") or tool_result.get("tool") or "unknown_step",
+                    tool=tool_result.get("tool") or "unknown_tool",
+                    args=tool_result.get("args_input") or {},
+                    tool_output=tool_result,
+                    used_fallback=bool(tool_result.get("used_fallback", False)),
+                    idempotency_key=idempotency_key,
+                )
+
+            if AGENT_MODE == "real" and bool(tool_result.get("used_fallback", False)):
+                raise RuntimeError(
+                    f"Fallback detectado em modo real para tool={tool_result.get('tool')}"
+                )
         if tool_execution['insights']:
             log(f"Insights gerados: {len(tool_execution['insights'])}")
             for insight in tool_execution['insights']:
@@ -713,6 +869,7 @@ def main_loop() -> None:
     log(f"TABLE={TABLE}")
     log(f"STATE_TABLE={STATE_TABLE}")
     log(f"MODEL={MODEL}")
+    log(f"AGENT_MODE={AGENT_MODE}")
     log(f"LOOP_INTERVAL_MINUTES={LOOP_INTERVAL_MINUTES}")
     log(f"MEMORY_WINDOW={MEMORY_WINDOW}")
     log(f"Process RUN_ID={process_run_id}")
@@ -742,4 +899,3 @@ def main_loop() -> None:
 
 if __name__ == "__main__":
     main_loop()
-
