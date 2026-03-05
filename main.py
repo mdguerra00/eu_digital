@@ -70,6 +70,9 @@ RUN_ID_COL = os.environ.get("RUN_ID_COL", "run_id")
 CYCLE_NUMBER_COL = os.environ.get("CYCLE_NUMBER_COL", "cycle_number")
 FOCUS_COL = os.environ.get("FOCUS_COL", "focus")
 RECEIPTS_TABLE = os.environ.get("EXECUTION_RECEIPTS_TABLE", "execution_receipts")
+if RECEIPTS_TABLE.startswith("public."):
+    # Supabase client espera apenas o nome da tabela (sem schema) em sb.table(...).
+    RECEIPTS_TABLE = RECEIPTS_TABLE.split(".", 1)[1]
 _receipts_table_disabled = False
 
 # --- Carregamento do Estatuto ---
@@ -674,7 +677,7 @@ def _write_execution_receipt(
         except Exception as e:
             # Railway/Supabase pode não ter a tabela de receipts criada ainda.
             # Nesse caso, fazemos fallback para arquivo local e evitamos falhar o ciclo.
-            if "PGRST205" in repr(e) or RECEIPTS_TABLE in repr(e):
+            if _is_missing_receipts_table_error(e):
                 _receipts_table_disabled = True
                 log(
                     f"Aviso: tabela de receipts '{RECEIPTS_TABLE}' indisponível no Supabase. "
@@ -702,7 +705,7 @@ def _receipt_already_exists(idempotency_key: str) -> bool:
             )
             return bool(res.data)
         except Exception as e:
-            if "PGRST205" in repr(e) or RECEIPTS_TABLE in repr(e):
+            if _is_missing_receipts_table_error(e):
                 _receipts_table_disabled = True
                 log(
                     f"Aviso: tabela de receipts '{RECEIPTS_TABLE}' indisponível no Supabase durante consulta. "
@@ -732,6 +735,17 @@ def _receipt_already_exists(idempotency_key: str) -> bool:
         log("Aviso: falha ao ler execution_receipts.jsonl:", repr(e))
 
     return False
+
+
+def _is_missing_receipts_table_error(exc: Exception) -> bool:
+    error_text = f"{exc}\n{repr(exc)}".lower()
+    return (
+        "pgrst205" in error_text
+        or "schema cache" in error_text
+        or "could not find the table" in error_text
+        or RECEIPTS_TABLE.lower() in error_text
+        or f"public.{RECEIPTS_TABLE.lower()}" in error_text
+    )
 
 
 # -----------------------------
