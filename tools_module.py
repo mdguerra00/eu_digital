@@ -243,7 +243,8 @@ class WebScraperTool:
     Permite análise de concorrentes, extração de preços e tendências.
     """
 
-    def __init__(self):
+    def __init__(self, steel_browser: Optional["SteelBrowserTool"] = None):
+        self.steel_browser = steel_browser
         self.scrape_history: List[Dict[str, Any]] = []
 
     def scrape_page(
@@ -252,6 +253,27 @@ class WebScraperTool:
         """
         Raspa o conteúdo de uma página web.
         """
+        steel_error: Optional[str] = None
+
+        if self.steel_browser is not None:
+            steel_result = self.steel_browser.scrape(
+                url=url,
+                extract_text=extract_text,
+                extract_links=extract_links,
+            )
+            if steel_result.get("success"):
+                self.scrape_history.append(
+                    {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "url": url,
+                        "success": True,
+                        "provider": "steel_browser",
+                    }
+                )
+                return steel_result
+
+            steel_error = steel_result.get("error", "Falha desconhecida no Steel Browser")
+
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -267,7 +289,11 @@ class WebScraperTool:
                 "success": True,
                 "status_code": response.status_code,
                 "title": soup.title.string if soup.title else "N/A",
+                "provider": "requests_bs4",
             }
+
+            if steel_error:
+                result["steel_error"] = steel_error
 
             if extract_text:
                 for script in soup(["script", "style"]):
@@ -294,7 +320,10 @@ class WebScraperTool:
             return result
 
         except Exception as e:
-            return {"url": url, "success": False, "error": str(e)}
+            error_result: Dict[str, Any] = {"url": url, "success": False, "error": str(e)}
+            if steel_error:
+                error_result["steel_error"] = steel_error
+            return error_result
 
     def extract_prices(self, html_content: str) -> List[Dict[str, Any]]:
         """
@@ -318,6 +347,70 @@ class WebScraperTool:
         """Retorna o histórico de raspagens realizadas."""
         return self.scrape_history
 
+
+class SteelBrowserTool:
+    """
+    Cliente HTTP para serviços de browser remoto (ex.: Steel Browser no Railway).
+    Usa endpoint configurável para permitir variações de rota/provedor.
+    """
+
+    def __init__(self, api_key: Optional[str], endpoint: Optional[str] = None, timeout_s: int = 25):
+        self.api_key = api_key
+        self.endpoint = endpoint or os.getenv("STEEL_BROWSER_ENDPOINT", "https://api.steel.dev/v1/scrape")
+        self.timeout_s = timeout_s
+
+    def is_configured(self) -> bool:
+        return bool(self.api_key)
+
+    def scrape(self, url: str, extract_text: bool = True, extract_links: bool = False) -> Dict[str, Any]:
+        if not self.is_configured():
+            return {"success": False, "url": url, "error": "STEEL_BROWSER_API_KEY ausente"}
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+        payload: Dict[str, Any] = {
+            "url": url,
+            "options": {
+                "extract_text": extract_text,
+                "extract_links": extract_links,
+            },
+        }
+
+        try:
+            response = requests.post(self.endpoint, headers=headers, json=payload, timeout=self.timeout_s)
+            response.raise_for_status()
+            data = response.json()
+
+            text = data.get("text") or data.get("content") or data.get("markdown") or ""
+            title = data.get("title") or data.get("page", {}).get("title") or "N/A"
+            links = data.get("links") or []
+
+            result: Dict[str, Any] = {
+                "url": url,
+                "success": True,
+                "status_code": data.get("status_code") or response.status_code,
+                "title": title,
+                "provider": "steel_browser",
+            }
+
+            if extract_text:
+                result["text"] = text[:2000]
+
+            if extract_links:
+                result["links"] = links[:20] if isinstance(links, list) else []
+
+            return result
+        except Exception as e:
+            return {
+                "url": url,
+                "success": False,
+                "provider": "steel_browser",
+                "error": str(e),
+            }
 
 class MarketAnalyzerTool:
     """
