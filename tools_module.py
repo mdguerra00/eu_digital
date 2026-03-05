@@ -1,9 +1,13 @@
 """
 Módulo de Ferramentas para o Agente "EU DE NEGÓCIOS"
 Fornece capacidades de busca web, navegação e análise de conteúdo.
+
+Alteração: Brave Search API -> Perplexity Search API
+- Lê a chave do Railway via env var: PERPLEXITY_API_KEY
+Docs: POST https://api.perplexity.ai/search  (Authorization: Bearer <token>)
 """
 
-import json
+import os
 import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
@@ -14,80 +18,144 @@ from bs4 import BeautifulSoup
 
 class WebSearchTool:
     """
-    Ferramenta de busca web usando a API do Brave Search (gratuita).
+    Ferramenta de busca web usando a Perplexity Search API.
     Permite que o agente pesquise nichos, produtos e tendências de mercado.
     """
-    
+
     def __init__(self, api_key: Optional[str] = None):
         """
         Inicializa a ferramenta de busca.
-        
+
         Args:
-            api_key: Chave da API Brave Search (opcional, pode usar fallback)
+            api_key: Perplexity API key (Bearer token). Opcional (usa fallback se ausente).
         """
         self.api_key = api_key
-        self.base_url = "https://api.search.brave.com/res/v1/web/search"
-        self.search_history = []
-    
-    def search(self, query: str, count: int = 10) -> Dict[str, Any]:
+        self.base_url = "https://api.perplexity.ai/search"
+        self.search_history: List[Dict[str, Any]] = []
+
+    def search(
+        self,
+        query: str,
+        count: int = 10,
+        *,
+        country: Optional[str] = None,
+        search_language_filter: Optional[List[str]] = None,
+        search_domain_filter: Optional[List[str]] = None,
+        search_recency_filter: Optional[str] = None,  # hour/day/week/month/year
+        max_tokens: Optional[int] = None,
+        max_tokens_per_page: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
-        Realiza uma busca na web.
-        
+        Realiza uma busca na web via Perplexity Search API.
+
         Args:
             query: Termo de busca
-            count: Número de resultados (máximo 20)
-        
+            count: Número de resultados (1..20)
+            country: ISO 3166-1 alpha-2 (ex: "BR", "US")
+            search_language_filter: lista ISO 639-1 (ex: ["pt", "en"])
+            search_domain_filter: lista de domínios (ex: ["g1.globo.com", "reuters.com"])
+            search_recency_filter: "hour" | "day" | "week" | "month" | "year"
+            max_tokens: máximo de tokens de contexto agregados (opcional)
+            max_tokens_per_page: máximo de tokens por página (opcional)
+
         Returns:
             Dicionário com resultados da busca
         """
         if not query or len(query.strip()) == 0:
-            return {"error": "Query vazia", "results": []}
-        
+            return {"success": False, "error": "Query vazia", "results": []}
+
         try:
             # Se não houver API key, usar fallback com busca simulada
             if not self.api_key:
                 return self._search_fallback(query)
-            
+
             headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
                 "Accept": "application/json",
-                "X-Subscription-Token": self.api_key,
             }
-            
-            params = {
-                "q": query,
-                "count": min(count, 20),
+
+            payload: Dict[str, Any] = {
+                "query": query,
+                "max_results": max(1, min(int(count), 20)),
             }
-            
-            response = requests.get(self.base_url, headers=headers, params=params, timeout=10)
+
+            # Parâmetros opcionais conforme docs do /search
+            if country:
+                payload["country"] = country
+            if search_language_filter:
+                payload["search_language_filter"] = search_language_filter[:20]
+            if search_domain_filter:
+                payload["search_domain_filter"] = search_domain_filter[:20]
+            if search_recency_filter:
+                payload["search_recency_filter"] = search_recency_filter
+            if max_tokens is not None:
+                payload["max_tokens"] = int(max_tokens)
+            if max_tokens_per_page is not None:
+                payload["max_tokens_per_page"] = int(max_tokens_per_page)
+
+            response = requests.post(self.base_url, headers=headers, json=payload, timeout=15)
             response.raise_for_status()
-            
+
             data = response.json()
-            
-            # Processar resultados
-            results = []
-            for item in data.get("web", []):
-                results.append({
-                    "title": item.get("title", ""),
-                    "url": item.get("url", ""),
-                    "description": item.get("description", ""),
-                    "source": item.get("source", ""),
-                })
-            
+
+            # Perplexity /search retorna:
+            # { "results": [ {title,url,snippet,date,last_updated}, ... ], "id": "...", "server_time": "..." }
+            raw_results = data.get("results", []) or []
+            results: List[Dict[str, Any]] = []
+
+            for item in raw_results:
+                title = (item.get("title") or "").strip()
+                url = (item.get("url") or "").strip()
+                snippet = (item.get("snippet") or "").strip()
+                date = (item.get("date") or "").strip()
+                last_updated = (item.get("last_updated") or "").strip()
+
+                results.append(
+                    {
+                        "title": title,
+                        "url": url,
+                        "description": snippet,        # mantém compatibilidade com seu formato antigo
+                        "source": "Perplexity Search", # pode trocar por domínio se quiser
+                        "date": date,
+                        "last_updated": last_updated,
+                    }
+                )
+
             search_record = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "query": query,
                 "result_count": len(results),
                 "results": results,
+                "provider_meta": {
+                    "provider": "perplexity",
+                    "id": data.get("id"),
+                    "server_time": data.get("server_time"),
+                },
             }
             self.search_history.append(search_record)
-            
+
             return {
                 "success": True,
                 "query": query,
                 "result_count": len(results),
                 "results": results,
+                "provider_meta": search_record["provider_meta"],
             }
-        
+
+        except requests.HTTPError as e:
+            # Ajuda na depuração: tenta retornar body (JSON ou texto)
+            try:
+                err_payload = response.json()  # type: ignore[name-defined]
+            except Exception:
+                err_payload = getattr(response, "text", "")  # type: ignore[name-defined]
+            return {
+                "success": False,
+                "error": f"HTTPError: {str(e)}",
+                "details": err_payload,
+                "query": query,
+                "results": [],
+            }
         except Exception as e:
             return {
                 "success": False,
@@ -95,7 +163,7 @@ class WebSearchTool:
                 "query": query,
                 "results": [],
             }
-    
+
     def _search_fallback(self, query: str) -> Dict[str, Any]:
         """
         Fallback de busca quando não há API key disponível.
@@ -133,16 +201,14 @@ class WebSearchTool:
                 },
             ],
         }
-        
-        # Buscar resultados relevantes
-        results = []
+
+        results: List[Dict[str, Any]] = []
         query_lower = query.lower()
-        
+
         for key, items in fallback_results.items():
             if key in query_lower:
                 results.extend(items)
-        
-        # Se não encontrar correspondência exata, retornar alguns resultados genéricos
+
         if not results:
             results = [
                 {
@@ -152,14 +218,14 @@ class WebSearchTool:
                     "source": "Fallback",
                 },
             ]
-        
+
         return {
             "success": True,
             "query": query,
             "result_count": len(results),
             "results": results[:10],
         }
-    
+
     def get_search_history(self) -> List[Dict[str, Any]]:
         """Retorna o histórico de buscas realizadas."""
         return self.search_history
@@ -170,103 +236,78 @@ class WebScraperTool:
     Ferramenta de raspagem web para extrair conteúdo de páginas.
     Permite análise de concorrentes, extração de preços e tendências.
     """
-    
+
     def __init__(self):
-        self.scrape_history = []
-    
-    def scrape_page(self, url: str, extract_text: bool = True, extract_links: bool = False) -> Dict[str, Any]:
+        self.scrape_history: List[Dict[str, Any]] = []
+
+    def scrape_page(
+        self, url: str, extract_text: bool = True, extract_links: bool = False
+    ) -> Dict[str, Any]:
         """
         Raspa o conteúdo de uma página web.
-        
-        Args:
-            url: URL da página
-            extract_text: Se deve extrair texto
-            extract_links: Se deve extrair links
-        
-        Returns:
-            Dicionário com conteúdo extraído
         """
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             }
-            
+
             response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
-            
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            result = {
+
+            soup = BeautifulSoup(response.content, "html.parser")
+
+            result: Dict[str, Any] = {
                 "url": url,
+                "success": True,
                 "status_code": response.status_code,
                 "title": soup.title.string if soup.title else "N/A",
             }
-            
-            # Extrair texto
+
             if extract_text:
-                # Remover scripts e styles
                 for script in soup(["script", "style"]):
                     script.decompose()
-                
+
                 text = soup.get_text(separator="\n", strip=True)
-                # Limitar a 2000 caracteres
                 result["text"] = text[:2000]
-            
-            # Extrair links
+
             if extract_links:
                 links = []
-                for link in soup.find_all('a', href=True):
-                    links.append({
-                        "text": link.get_text(strip=True),
-                        "href": link['href'],
-                    })
-                result["links"] = links[:20]  # Limitar a 20 links
-            
-            scrape_record = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "url": url,
-                "success": True,
-            }
-            self.scrape_history.append(scrape_record)
-            
+                for link in soup.find_all("a", href=True):
+                    links.append(
+                        {
+                            "text": link.get_text(strip=True),
+                            "href": link["href"],
+                        }
+                    )
+                result["links"] = links[:20]
+
+            self.scrape_history.append(
+                {"timestamp": datetime.now(timezone.utc).isoformat(), "url": url, "success": True}
+            )
+
             return result
-        
+
         except Exception as e:
-            return {
-                "url": url,
-                "success": False,
-                "error": str(e),
-            }
-    
+            return {"url": url, "success": False, "error": str(e)}
+
     def extract_prices(self, html_content: str) -> List[Dict[str, Any]]:
         """
         Extrai preços de conteúdo HTML.
-        
-        Args:
-            html_content: Conteúdo HTML
-        
-        Returns:
-            Lista de preços encontrados
         """
-        prices = []
-        
-        # Padrões comuns de preço
+        prices: List[Dict[str, Any]] = []
         patterns = [
-            r'R\$\s*(\d+[.,]\d{2})',  # R$ 99.90
-            r'\$\s*(\d+[.,]\d{2})',   # $ 99.90
-            r'(\d+[.,]\d{2})\s*reais',  # 99.90 reais
+            r"R\$\s*(\d+[.,]\d{2})",
+            r"\$\s*(\d+[.,]\d{2})",
+            r"(\d+[.,]\d{2})\s*reais",
         ]
-        
+
         for pattern in patterns:
             matches = re.findall(pattern, html_content)
             for match in matches:
-                prices.append({
-                    "value": match,
-                    "pattern": pattern,
-                })
-        
+                prices.append({"value": match, "pattern": pattern})
+
         return prices
-    
+
     def get_scrape_history(self) -> List[Dict[str, Any]]:
         """Retorna o histórico de raspagens realizadas."""
         return self.scrape_history
@@ -277,82 +318,83 @@ class MarketAnalyzerTool:
     Ferramenta de análise de mercado que combina busca e raspagem
     para gerar insights sobre nichos e oportunidades.
     """
-    
+
     def __init__(self, search_tool: WebSearchTool, scraper_tool: WebScraperTool):
         self.search_tool = search_tool
         self.scraper_tool = scraper_tool
-    
+
     def analyze_niche(self, niche_name: str) -> Dict[str, Any]:
         """
         Analisa um nicho de mercado.
-        
-        Args:
-            niche_name: Nome do nicho (ex: "marketing digital", "cursos online")
-        
-        Returns:
-            Dicionário com análise do nicho
         """
-        analysis = {
+        analysis: Dict[str, Any] = {
             "niche": niche_name,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "search_results": None,
             "competitor_analysis": [],
             "opportunities": [],
         }
-        
-        # Buscar informações sobre o nicho
+
         search_query = f"{niche_name} mercado oportunidades 2026"
-        search_results = self.search_tool.search(search_query, count=5)
+        search_results = self.search_tool.search(
+            search_query,
+            count=5,
+            country="BR",
+            search_recency_filter="year",
+            search_language_filter=["pt"],
+        )
         analysis["search_results"] = search_results
-        
-        # Analisar alguns dos top resultados
+
         if search_results.get("success"):
             for result in search_results.get("results", [])[:3]:
                 url = result.get("url")
                 if url:
                     scrape_result = self.scraper_tool.scrape_page(url, extract_text=True)
                     if scrape_result.get("success"):
-                        analysis["competitor_analysis"].append({
-                            "url": url,
-                            "title": result.get("title"),
-                            "text_preview": scrape_result.get("text", "")[:500],
-                        })
-        
-        # Gerar oportunidades (baseado em padrões simples)
+                        analysis["competitor_analysis"].append(
+                            {
+                                "url": url,
+                                "title": result.get("title"),
+                                "text_preview": (scrape_result.get("text", "") or "")[:500],
+                            }
+                        )
+
         analysis["opportunities"] = [
             f"Criar conteúdo em português focado em '{niche_name}'",
             f"Buscar produtos de afiliados relacionados a '{niche_name}'",
             f"Analisar concorrência em plataformas de cursos para '{niche_name}'",
             f"Investigar demanda por '{niche_name}' em redes sociais",
         ]
-        
+
         return analysis
 
 
-# Exemplo de uso
 if __name__ == "__main__":
-    print("=== Testando Ferramentas de Web ===\n")
-    
-    # Teste 1: Web Search
+    print("=== Testando Ferramentas de Web (Perplexity) ===\n")
+
+    # Railway: a chave deve estar em Variables como PERPLEXITY_API_KEY
+    api_key = os.getenv("PERPLEXITY_API_KEY")
+
+    # 1) Web Search
     print("1. Testando Web Search...")
-    search_tool = WebSearchTool()
-    results = search_tool.search("marketing de afiliados 2026")
-    print(f"   Resultados encontrados: {results['result_count']}")
-    for i, result in enumerate(results['results'][:3], 1):
-        print(f"   {i}. {result['title']}")
-    
-    # Teste 2: Web Scraper
+    search_tool = WebSearchTool(api_key=api_key)
+    results = search_tool.search("marketing de afiliados 2026", count=5)
+    print(f"   Resultados encontrados: {results.get('result_count', 0)}")
+    for i, result in enumerate(results.get("results", [])[:3], 1):
+        print(f"   {i}. {result.get('title')}")
+
+    # 2) Web Scraper
     print("\n2. Testando Web Scraper...")
     scraper_tool = WebScraperTool()
     scrape_result = scraper_tool.scrape_page("https://example.com", extract_text=True)
     print(f"   Status: {scrape_result.get('status_code', 'N/A')}")
     print(f"   Título: {scrape_result.get('title', 'N/A')}")
-    
-    # Teste 3: Market Analyzer
+
+    # 3) Market Analyzer
     print("\n3. Testando Market Analyzer...")
     analyzer = MarketAnalyzerTool(search_tool, scraper_tool)
     analysis = analyzer.analyze_niche("cursos online")
     print(f"   Nicho: {analysis['niche']}")
     print(f"   Oportunidades identificadas: {len(analysis['opportunities'])}")
-    for opp in analysis['opportunities']:
+    for opp in analysis["opportunities"]:
         print(f"   - {opp}")
