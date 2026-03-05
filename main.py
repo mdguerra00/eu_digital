@@ -521,29 +521,51 @@ def update_task_prompt_from_cycle(saved_row: Dict[str, Any]) -> None:
         reflection = (saved_row.get(REFLECTION_COL) or "").strip()
 
         # Prompt do próximo ciclo — sanitizado para evitar herdar modo de espera
+        # Padrões que indicam loop improdutivo
         BLOQUEADOS = [
             "aguardar aprovação", "aguardando aprovação", "monitor_feedback",
             "esperar feedback", "monitorar feedback", "approval", "await",
             "continuar monitorando", "recebimento de aprovação",
         ]
+        # Padrões que indicam planejamento genérico sem execução concreta
+        GENERICOS = [
+            "mapear para cada", "preparar cronograma", "plano de divulgação",
+            "estratégias personalizadas", "montar plano", "elaborar plano",
+            "definir estratégia", "planejar entrada", "próximos passos",
+        ]
         prompt_contaminado = any(b in (next_actions or "").lower() for b in BLOQUEADOS)
+        prompt_generico = any(g in (next_actions or "").lower() for g in GENERICOS)
+
+        cycle_number = saved_row.get(CYCLE_NUMBER_COL) or 0
 
         if prompt_contaminado:
-            log("[UpdatePrompt] AVISO: next_actions contém padrão de espera. Usando prompt padrão de execução.")
+            log("[UpdatePrompt] AVISO: next_actions com padrão de espera. Resetando.")
             new_prompt = (
-                "O ciclo anterior ficou preso em modo de espera. "
-                "Ignore esse histórico. Execute agora: pesquise oportunidades reais de negócio usando web_search. "
-                "Escolha um nicho, analise com market_analyzer e proponha um plano de ação concreto."
+                "Ignore ciclos anteriores. Execute agora: use web_search para pesquisar "
+                "'top produtos hotmart afiliados alta comissão 2026 brasil' e liste produtos reais "
+                "com nome, nicho e comissão estimada."
+            )
+        elif prompt_generico:
+            # Forçar ação específica e concreta no próximo ciclo
+            log("[UpdatePrompt] AVISO: next_actions genérico detectado. Forçando ação concreta.")
+            result_text = (saved_row.get(RESULT_COL) or "").strip()
+            new_prompt = (
+                f"Os ciclos anteriores pesquisaram estratégias genéricas. "
+                f"Agora execute uma ação CONCRETA e DIFERENTE.\n\n"
+                f"Dados já coletados (use como base):\n{result_text[:400]}\n\n"
+                f"Próximo passo obrigatório: escolha UM produto ou nicho específico dos dados acima "
+                f"e pesquise com web_search dados concretos sobre ele: "
+                f"nome do produto, comissão real, link de afiliado, volume de vendas. "
+                f"NÃO repita buscas genéricas sobre estratégias ou canais."
             )
         elif reflection:
             new_prompt = (
-                f"Use as lições abaixo para executar os próximos passos concretos.\n\n"
-                f"REFLECTION:\n{reflection}\n\n"
-                f"NEXT_ACTIONS:\n{next_actions or '[vazio]'}\n\n"
-                f"Execute o próximo passo mais importante agora, com entregável real."
+                f"Dados do ciclo anterior para continuar:\n\n"
+                f"REFLECTION:\n{reflection[:300]}\n\n"
+                f"PRÓXIMO PASSO (execute agora, seja específico):\n{next_actions[:400] or '[vazio]'}"
             )
         else:
-            new_prompt = next_actions or "Execute a próxima ação de negócio mais relevante agora."
+            new_prompt = next_actions or "Execute a próxima ação de negócio mais concreta agora."
 
         if sb is not None:
             # Upsert (update se existe; insert se não existe)
