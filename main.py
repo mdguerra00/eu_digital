@@ -296,6 +296,42 @@ def get_next_cycle_number(agent_name: str) -> int:
     return 1
 
 
+
+def _coerce_api_error_payload(exc: Exception) -> Dict[str, Any]:
+    """Normaliza payload de APIError para dict, evitando crashes por tipo inesperado."""
+    raw_payload = None
+
+    args = getattr(exc, "args", ())
+    if args:
+        raw_payload = args[0]
+
+    if isinstance(raw_payload, dict):
+        return raw_payload
+
+    if isinstance(raw_payload, str):
+        try:
+            parsed_payload = json.loads(raw_payload)
+            if isinstance(parsed_payload, dict):
+                return parsed_payload
+        except Exception:
+            pass
+
+        try:
+            import ast
+            parsed_payload = ast.literal_eval(raw_payload)
+            if isinstance(parsed_payload, dict):
+                return parsed_payload
+        except Exception:
+            pass
+
+        return {"message": raw_payload}
+
+    message = str(exc)
+    if message:
+        return {"message": message}
+
+    return {}
+
 def write_cycle(row: Dict[str, Any]) -> Dict[str, Any]:
     log("Insert payload keys:", sorted(list(row.keys())))
 
@@ -303,6 +339,10 @@ def write_cycle(row: Dict[str, Any]) -> Dict[str, Any]:
         try:
             res = sb.table(TABLE).insert(row).execute()
         except APIError as e:
+            error_payload = _coerce_api_error_payload(e)
+
+            if not isinstance(error_payload, dict):
+                error_payload = {"message": str(error_payload)}
             error_payload = {}
             raw_payload = getattr(e, "args", [None])[0]
             if isinstance(raw_payload, dict):
