@@ -5,6 +5,8 @@ Interpreta e executa chamadas de ferramentas baseadas no plano de ação do agen
 
 import re
 import hashlib
+import json
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 from tools_module import WebSearchTool, WebScraperTool, MarketAnalyzerTool
 from financial_module import FinancialWallet
@@ -22,6 +24,7 @@ class ToolExecutor:
         self.market_analyzer = market_analyzer
         self.wallet = wallet
         self.execution_history = []
+        self.feedback_file = Path("creator_feedback.json")
     
     def execute_tools(self, next_actions: str, cycle_number: int) -> Dict[str, Any]:
         """
@@ -156,6 +159,14 @@ class ToolExecutor:
                 execution_result["tools_executed"].append(result)
                 continue
 
+            if tool == "monitoring_system.record_feedback":
+                result = self._execute_record_feedback(args)
+                result["step_id"] = step_id
+                result["args_input"] = args
+                result["idempotency_key"] = idempotency_key
+                execution_result["tools_executed"].append(result)
+                continue
+
             execution_result["errors"].append(f"{step_id}: tool não suportada ({tool})")
 
         if execution_result["tools_executed"]:
@@ -163,6 +174,75 @@ class ToolExecutor:
 
         self.execution_history.append(execution_result)
         return execution_result
+
+    def _execute_record_feedback(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Registra feedback do Criador.
+
+        Prioridade de captura:
+        1) args.feedback (ou aliases)
+        2) arquivo creator_feedback.json na raiz do projeto
+        """
+        feedback = (
+            args.get("feedback")
+            or args.get("message")
+            or args.get("content")
+            or ""
+        )
+        feedback = str(feedback).strip()
+
+        source = "plan_args"
+        payload: Dict[str, Any] = {}
+
+        if not feedback:
+            if not self.feedback_file.exists():
+                return {
+                    "tool": "monitoring_system.record_feedback",
+                    "success": False,
+                    "status": "waiting_feedback",
+                    "message": (
+                        "Nenhum feedback encontrado. Para responder, informe args.feedback "
+                        "ou crie o arquivo creator_feedback.json com {'feedback': '...'}"
+                    ),
+                }
+
+            try:
+                payload = json.loads(self.feedback_file.read_text(encoding="utf-8"))
+            except Exception as exc:
+                return {
+                    "tool": "monitoring_system.record_feedback",
+                    "success": False,
+                    "status": "invalid_feedback_file",
+                    "message": f"creator_feedback.json inválido: {exc}",
+                }
+
+            feedback = str(
+                payload.get("feedback")
+                or payload.get("message")
+                or payload.get("content")
+                or ""
+            ).strip()
+            source = "creator_feedback.json"
+
+            if not feedback:
+                return {
+                    "tool": "monitoring_system.record_feedback",
+                    "success": False,
+                    "status": "waiting_feedback",
+                    "message": "creator_feedback.json existe, mas sem campo feedback/message/content.",
+                }
+
+        return {
+            "tool": "monitoring_system.record_feedback",
+            "success": True,
+            "status": "feedback_recorded",
+            "feedback": feedback,
+            "source": source,
+            "metadata": {
+                "author": args.get("author") or payload.get("author") or "Criador",
+                "timestamp": args.get("timestamp") or payload.get("timestamp"),
+            },
+        }
     
     def _extract_niches(self, text: str) -> list:
         """Extrai nomes de nichos do texto."""
