@@ -343,6 +343,25 @@ def write_cycle(row: Dict[str, Any]) -> Dict[str, Any]:
 
             if not isinstance(error_payload, dict):
                 error_payload = {"message": str(error_payload)}
+            error_payload = {}
+            raw_payload = getattr(e, "args", [None])[0]
+            if isinstance(raw_payload, dict):
+                error_payload = raw_payload
+            elif isinstance(raw_payload, str):
+                try:
+                    parsed_payload = json.loads(raw_payload)
+                    if isinstance(parsed_payload, dict):
+                        error_payload = parsed_payload
+                except Exception:
+                    try:
+                        import ast
+                        parsed_payload = ast.literal_eval(raw_payload)
+                        if isinstance(parsed_payload, dict):
+                            error_payload = parsed_payload
+                        else:
+                            error_payload = {"message": raw_payload}
+                    except Exception:
+                        error_payload = {"message": raw_payload}
 
             error_code = error_payload.get("code")
             error_message = error_payload.get("message", "")
