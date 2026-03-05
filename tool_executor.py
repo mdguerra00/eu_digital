@@ -110,6 +110,9 @@ class ToolExecutor:
                 result["step_id"] = step_id
                 result["args_input"] = args
                 result["idempotency_key"] = idempotency_key
+                result = self._execute_web_search(query)
+                result["count_requested"] = count
+                result["step_id"] = step_id
                 execution_result["tools_executed"].append(result)
                 continue
 

@@ -831,6 +831,16 @@ def run_once(run_id: str) -> Dict[str, Any]:
                     idempotency_key=idempotency_key,
                 )
 
+            _write_execution_receipt(
+                run_id=run_id,
+                cycle_number=cycle_number,
+                step_id=tool_result.get("step_id") or tool_result.get("tool") or "unknown_step",
+                tool=tool_result.get("tool") or "unknown_tool",
+                args={},
+                tool_output=tool_result,
+                used_fallback=bool(tool_result.get("used_fallback", False)),
+            )
+
             if AGENT_MODE == "real" and bool(tool_result.get("used_fallback", False)):
                 raise RuntimeError(
                     f"Fallback detectado em modo real para tool={tool_result.get('tool')}"
