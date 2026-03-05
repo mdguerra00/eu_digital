@@ -472,23 +472,38 @@ class SteelBrowserTool:
     Usa endpoint configurável para permitir variações de rota/provedor.
     """
 
-    def __init__(self, api_key: Optional[str], endpoint: Optional[str] = None, timeout_s: int = 25):
-        self.api_key = api_key
-        self.endpoint = endpoint or os.getenv("STEEL_BROWSER_ENDPOINT", "https://api.steel.dev/v1/scrape")
+    def __init__(self, api_key: Optional[str] = None, endpoint: Optional[str] = None, timeout_s: int = 25):
+        # CORRIGIDO: api_key é opcional — Steel Browser no Railway não exige autenticação
+        # Configura o endpoint a partir de:
+        #   1) argumento direto
+        #   2) env var STEEL_BROWSER_ENDPOINT (recomendado no Railway)
+        #   3) URL pública do Railway como fallback
+        self.api_key = api_key  # pode ser None quando rodando no Railway interno
+        self.endpoint = (
+            endpoint
+            or os.getenv("STEEL_BROWSER_ENDPOINT")
+            or "https://steel-browser-production-008f.up.railway.app/scrape"
+        )
         self.timeout_s = timeout_s
 
     def is_configured(self) -> bool:
-        return bool(self.api_key)
+        # CORRIGIDO: configurado se tiver endpoint — não depende mais de api_key
+        return bool(self.endpoint)
 
     def scrape(self, url: str, extract_text: bool = True, extract_links: bool = False) -> Dict[str, Any]:
         if not self.is_configured():
-            return {"success": False, "url": url, "error": "STEEL_BROWSER_API_KEY ausente"}
+            return {"success": False, "url": url, "error": "STEEL_BROWSER_ENDPOINT nao configurado"}
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
+        # LOG DE DIAGNOSTICO — visivel nos logs do Railway
+        print(f"[SteelBrowser] endpoint={self.endpoint} | url={url[:80]!r}", flush=True)
+
+        # Headers: so envia Authorization se tiver api_key (compatibilidade futura)
+        headers: Dict[str, str] = {
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
         payload: Dict[str, Any] = {
             "url": url,
