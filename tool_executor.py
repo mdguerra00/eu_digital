@@ -110,9 +110,6 @@ class ToolExecutor:
                 result["step_id"] = step_id
                 result["args_input"] = args
                 result["idempotency_key"] = idempotency_key
-                result = self._execute_web_search(query)
-                result["count_requested"] = count
-                result["step_id"] = step_id
                 execution_result["tools_executed"].append(result)
                 continue
 
@@ -251,14 +248,22 @@ class ToolExecutor:
         """Executa busca web."""
         try:
             result = self.search_tool.search(query, count=count)
+            urls = [r.get("url") for r in result.get("results", []) if r.get("url")]
+
+            enrichment_scrape = None
+            if urls:
+                enrichment_scrape = self._execute_scrape(urls[0])
+
             return {
                 "tool": "web_search",
                 "query": query,
                 "success": result.get("success", False),
                 "result_count": result.get("result_count", 0),
                 "results_preview": [r["title"] for r in result.get("results", [])[:3]],
+                "top_result_url": urls[0] if urls else None,
                 "used_fallback": result.get("used_fallback", False),
                 "provider": (result.get("provider_meta") or {}).get("provider", "unknown"),
+                "enrichment_scrape": enrichment_scrape,
             }
         except Exception as e:
             return {
