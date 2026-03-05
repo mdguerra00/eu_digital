@@ -391,6 +391,8 @@ class WebScraperTool:
                 return steel_result
 
             steel_error = steel_result.get("error", "Falha desconhecida no Steel Browser")
+            # Log explícito para diagnóstico — aparece nos logs do Railway
+            print(f"[SteelBrowser] FALHA | error={steel_error!r} | url={url[:80]!r}", flush=True)
 
         try:
             headers = {
