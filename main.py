@@ -70,6 +70,7 @@ RUN_ID_COL = os.environ.get("RUN_ID_COL", "run_id")
 CYCLE_NUMBER_COL = os.environ.get("CYCLE_NUMBER_COL", "cycle_number")
 FOCUS_COL = os.environ.get("FOCUS_COL", "focus")
 RECEIPTS_TABLE = os.environ.get("EXECUTION_RECEIPTS_TABLE", "execution_receipts")
+_receipts_table_disabled = False
 
 # --- Carregamento do Estatuto ---
 ESTATUTO_PATH = Path(__file__).parent / "ESTATUTO.md"
@@ -643,6 +644,8 @@ def _write_execution_receipt(
     used_fallback: bool,
     idempotency_key: str,
 ) -> None:
+    global _receipts_table_disabled
+
     started_at = utc_now_iso()
     finished_at = utc_now_iso()
     status = "success" if tool_output.get("success") else "failed"
@@ -664,9 +667,21 @@ def _write_execution_receipt(
         "idempotency_key": idempotency_key,
     }
 
-    if sb is not None:
-        sb.table(RECEIPTS_TABLE).insert(receipt).execute()
-        return
+    if sb is not None and not _receipts_table_disabled:
+        try:
+            sb.table(RECEIPTS_TABLE).insert(receipt).execute()
+            return
+        except Exception as e:
+            # Railway/Supabase pode não ter a tabela de receipts criada ainda.
+            # Nesse caso, fazemos fallback para arquivo local e evitamos falhar o ciclo.
+            if "PGRST205" in repr(e) or RECEIPTS_TABLE in repr(e):
+                _receipts_table_disabled = True
+                log(
+                    f"Aviso: tabela de receipts '{RECEIPTS_TABLE}' indisponível no Supabase. "
+                    "Usando fallback local (execution_receipts.jsonl)."
+                )
+            else:
+                log("Aviso: falha ao gravar receipt no Supabase:", repr(e))
 
     receipts_file = Path("execution_receipts.jsonl")
     with open(receipts_file, "a", encoding="utf-8") as f:
@@ -674,7 +689,9 @@ def _write_execution_receipt(
 
 
 def _receipt_already_exists(idempotency_key: str) -> bool:
-    if sb is not None:
+    global _receipts_table_disabled
+
+    if sb is not None and not _receipts_table_disabled:
         try:
             res = (
                 sb.table(RECEIPTS_TABLE)
@@ -685,7 +702,14 @@ def _receipt_already_exists(idempotency_key: str) -> bool:
             )
             return bool(res.data)
         except Exception as e:
-            log("Aviso: falha ao consultar receipt por idempotency_key:", repr(e))
+            if "PGRST205" in repr(e) or RECEIPTS_TABLE in repr(e):
+                _receipts_table_disabled = True
+                log(
+                    f"Aviso: tabela de receipts '{RECEIPTS_TABLE}' indisponível no Supabase durante consulta. "
+                    "Usando fallback local (execution_receipts.jsonl)."
+                )
+            else:
+                log("Aviso: falha ao consultar receipt por idempotency_key:", repr(e))
             return False
 
     receipts_file = Path("execution_receipts.jsonl")
@@ -940,16 +964,6 @@ def run_once(run_id: str) -> Dict[str, Any]:
                     used_fallback=bool(tool_result.get("used_fallback", False)),
                     idempotency_key=idempotency_key,
                 )
-
-            _write_execution_receipt(
-                run_id=run_id,
-                cycle_number=cycle_number,
-                step_id=tool_result.get("step_id") or tool_result.get("tool") or "unknown_step",
-                tool=tool_result.get("tool") or "unknown_tool",
-                args={},
-                tool_output=tool_result,
-                used_fallback=bool(tool_result.get("used_fallback", False)),
-            )
 
             if AGENT_MODE == "real" and bool(tool_result.get("used_fallback", False)):
                 raise RuntimeError(
