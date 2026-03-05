@@ -2,9 +2,11 @@
 Módulo de Ferramentas para o Agente "EU DE NEGÓCIOS"
 Fornece capacidades de busca web, navegação e análise de conteúdo.
 
-Alteração: Brave Search API -> Perplexity Search API
-- Lê a chave do Railway via env var: PERPLEXITY_API_KEY
-Docs: POST https://api.perplexity.ai/search  (Authorization: Bearer <token>)
+Perplexity Search API (corrigido):
+- Endpoint: POST https://api.perplexity.ai/chat/completions
+- Modelo: sonar (otimizado para busca web em tempo real)
+- Env var no Railway: PERPLEXITY_API_KEY
+Docs: https://docs.perplexity.ai/api-reference/chat-completions
 """
 
 import os
@@ -48,7 +50,8 @@ class WebSearchTool:
             api_key: Perplexity API key (Bearer token). Opcional (usa fallback se ausente).
         """
         self.api_key = api_key
-        self.base_url = "https://api.perplexity.ai/search"
+        # CORRIGIDO: endpoint real da Perplexity (não existe /search — usa /chat/completions)
+        self.base_url = "https://api.perplexity.ai/chat/completions"
         self.ddg_html_url = "https://html.duckduckgo.com/html/?q="
         self.search_history: List[Dict[str, Any]] = []
 
@@ -83,8 +86,12 @@ class WebSearchTool:
         if not query or len(query.strip()) == 0:
             return {"success": False, "error": "Query vazia", "results": []}
 
+        # LOG DE DIAGNOSTICO - visivel nos logs do Railway
+        provider_log = "perplexity_sonar" if self.api_key else "duckduckgo_fallback"
+        print(f"[WebSearchTool] provider={provider_log} | query={query[:60]!r}", flush=True)
+
         try:
-            # Se não houver API key, tentar fallback real via DuckDuckGo HTML
+            # Se nao houver API key, tentar fallback real via DuckDuckGo HTML
             if not self.api_key:
                 ddg_result = self._search_via_duckduckgo(query, count=count)
                 if ddg_result.get("success"):
@@ -97,50 +104,65 @@ class WebSearchTool:
                 "Accept": "application/json",
             }
 
+            # CORRIGIDO: Perplexity usa /chat/completions com modelo "sonar"
+            # O modelo sonar tem busca web em tempo real e retorna citations com URLs
+            system_msg = "Voce e um assistente de pesquisa. Responda em portugues. Seja direto e factual."
+            if search_recency_filter:
+                system_msg += f" Priorize informacoes recentes ({search_recency_filter})."
+            if country == "BR":
+                system_msg += " Priorize fontes e contexto brasileiro."
+
             payload: Dict[str, Any] = {
-                "query": query,
-                "max_results": max(1, min(int(count), 20)),
+                "model": "sonar",
+                "messages": [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": f"Pesquise sobre: {query}. Retorne os principais resultados com URLs e fontes."},
+                ],
+                "max_tokens": max_tokens or 1024,
+                "temperature": 0.2,
+                "return_citations": True,
+                "return_related_questions": False,
             }
 
-            # Parâmetros opcionais conforme docs do /search
-            if country:
-                payload["country"] = country
-            if search_language_filter:
-                payload["search_language_filter"] = search_language_filter[:20]
             if search_domain_filter:
-                payload["search_domain_filter"] = search_domain_filter[:20]
-            if search_recency_filter:
-                payload["search_recency_filter"] = search_recency_filter
-            if max_tokens is not None:
-                payload["max_tokens"] = int(max_tokens)
-            if max_tokens_per_page is not None:
-                payload["max_tokens_per_page"] = int(max_tokens_per_page)
+                payload["search_domain_filter"] = search_domain_filter[:10]
 
-            response = _request_with_proxy_fallback("POST", self.base_url, headers=headers, json=payload, timeout=15)
+            response = _request_with_proxy_fallback("POST", self.base_url, headers=headers, json=payload, timeout=30)
             response.raise_for_status()
 
             data = response.json()
 
-            # Perplexity /search retorna:
-            # { "results": [ {title,url,snippet,date,last_updated}, ... ], "id": "...", "server_time": "..." }
-            raw_results = data.get("results", []) or []
+            # Perplexity /chat/completions retorna:
+            # { "choices": [{"message": {"content": "texto"}}], "citations": ["url1", "url2", ...] }
+            content_text = ""
+            try:
+                content_text = data["choices"][0]["message"]["content"]
+            except (KeyError, IndexError):
+                content_text = ""
+
+            citations: List[str] = data.get("citations") or []
+
             results: List[Dict[str, Any]] = []
-
-            for item in raw_results:
-                title = (item.get("title") or "").strip()
-                url = (item.get("url") or "").strip()
-                snippet = (item.get("snippet") or "").strip()
-                date = (item.get("date") or "").strip()
-                last_updated = (item.get("last_updated") or "").strip()
-
+            for i, url in enumerate(citations[:max(1, min(int(count), 20))]):
+                domain = url.split("/")[2] if "//" in url else url
                 results.append(
                     {
-                        "title": title,
+                        "title": f"{domain}",
                         "url": url,
-                        "description": snippet,        # mantém compatibilidade com seu formato antigo
-                        "source": "Perplexity Search", # pode trocar por domínio se quiser
-                        "date": date,
-                        "last_updated": last_updated,
+                        "description": content_text[:400] if i == 0 else f"Fonte: {domain}",
+                        "source": "Perplexity Sonar",
+                        "date": "",
+                    }
+                )
+
+            if not results and content_text:
+                results.append(
+                    {
+                        "title": f"Perplexity: {query}",
+                        "url": "",
+                        "description": content_text[:800],
+                        "source": "Perplexity Sonar",
+                        "date": "",
                     }
                 )
 
@@ -149,10 +171,12 @@ class WebSearchTool:
                 "query": query,
                 "result_count": len(results),
                 "results": results,
+                "raw_answer": content_text,
                 "provider_meta": {
-                    "provider": "perplexity",
+                    "provider": "perplexity_sonar",
+                    "model": "sonar",
                     "id": data.get("id"),
-                    "server_time": data.get("server_time"),
+                    "citations_count": len(citations),
                 },
             }
             self.search_history.append(search_record)
@@ -162,6 +186,7 @@ class WebSearchTool:
                 "query": query,
                 "result_count": len(results),
                 "results": results,
+                "raw_answer": content_text,
                 "provider_meta": search_record["provider_meta"],
                 "used_fallback": False,
             }
