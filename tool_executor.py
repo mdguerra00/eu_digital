@@ -171,6 +171,8 @@ class ToolExecutor:
                 "success": result.get("success", False),
                 "result_count": result.get("result_count", 0),
                 "results_preview": [r["title"] for r in result.get("results", [])[:3]],
+                "used_fallback": result.get("used_fallback", False),
+                "provider": (result.get("provider_meta") or {}).get("provider", "unknown"),
             }
         except Exception as e:
             return {
@@ -232,7 +234,11 @@ class ToolExecutor:
             tool = result.get("tool")
             
             if tool == "web_search" and result.get("success"):
-                insights.append(f"Busca '{result.get('query')}' retornou {result.get('result_count')} resultados relevantes.")
+                provider = result.get("provider", "unknown")
+                fallback_note = " (modo fallback/local)" if result.get("used_fallback") else ""
+                insights.append(
+                    f"Busca '{result.get('query')}' retornou {result.get('result_count')} resultados relevantes via {provider}{fallback_note}."
+                )
             
             elif tool == "market_analyzer" and result.get("success"):
                 opp_count = len(result.get("opportunities", []))

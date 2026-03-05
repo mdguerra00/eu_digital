@@ -141,6 +141,7 @@ class WebSearchTool:
                 "result_count": len(results),
                 "results": results,
                 "provider_meta": search_record["provider_meta"],
+                "used_fallback": False,
             }
 
         except requests.HTTPError as e:
@@ -224,6 +225,11 @@ class WebSearchTool:
             "query": query,
             "result_count": len(results),
             "results": results[:10],
+            "used_fallback": True,
+            "provider_meta": {
+                "provider": "fallback",
+                "reason": "PERPLEXITY_API_KEY ausente",
+            },
         }
 
     def get_search_history(self) -> List[Dict[str, Any]]:
