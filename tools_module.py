@@ -9,11 +9,29 @@ Docs: POST https://api.perplexity.ai/search  (Authorization: Bearer <token>)
 
 import os
 import re
+from urllib.parse import quote_plus
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
 import requests
 from bs4 import BeautifulSoup
+
+
+def _request_with_proxy_fallback(method: str, url: str, **kwargs):
+    """Executa request e, em erro de proxy/túnel, tenta novamente sem proxies de ambiente."""
+    try:
+        return requests.request(method, url, **kwargs)
+    except requests.RequestException as err:
+        message = str(err).lower()
+        proxy_markers = ("proxy", "tunnel connection failed", "cannot connect to proxy")
+        if not any(marker in message for marker in proxy_markers):
+            raise
+
+        retry_kwargs = dict(kwargs)
+        retry_kwargs.pop("proxies", None)
+        session = requests.Session()
+        session.trust_env = False
+        return session.request(method, url, **retry_kwargs)
 
 
 class WebSearchTool:
@@ -31,6 +49,7 @@ class WebSearchTool:
         """
         self.api_key = api_key
         self.base_url = "https://api.perplexity.ai/search"
+        self.ddg_html_url = "https://html.duckduckgo.com/html/?q="
         self.search_history: List[Dict[str, Any]] = []
 
     def search(
@@ -65,9 +84,12 @@ class WebSearchTool:
             return {"success": False, "error": "Query vazia", "results": []}
 
         try:
-            # Se não houver API key, usar fallback com busca simulada
+            # Se não houver API key, tentar fallback real via DuckDuckGo HTML
             if not self.api_key:
-                return self._search_fallback(query)
+                ddg_result = self._search_via_duckduckgo(query, count=count)
+                if ddg_result.get("success"):
+                    return ddg_result
+                return self._search_fallback(query, reason=ddg_result.get("error", "duckduckgo indisponível"))
 
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -94,7 +116,7 @@ class WebSearchTool:
             if max_tokens_per_page is not None:
                 payload["max_tokens_per_page"] = int(max_tokens_per_page)
 
-            response = requests.post(self.base_url, headers=headers, json=payload, timeout=15)
+            response = _request_with_proxy_fallback("POST", self.base_url, headers=headers, json=payload, timeout=15)
             response.raise_for_status()
 
             data = response.json()
@@ -165,7 +187,78 @@ class WebSearchTool:
                 "results": [],
             }
 
-    def _search_fallback(self, query: str) -> Dict[str, Any]:
+    def _search_via_duckduckgo(self, query: str, count: int = 10) -> Dict[str, Any]:
+        """Fallback de busca sem API key usando DuckDuckGo HTML."""
+        try:
+            encoded_query = quote_plus(query)
+            response = _request_with_proxy_fallback(
+                "GET",
+                f"{self.ddg_html_url}{encoded_query}",
+                headers={
+                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+                    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+                },
+                timeout=12,
+            )
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            parsed_results: List[Dict[str, Any]] = []
+
+            for card in soup.select("div.result"):
+                link_el = card.select_one("a.result__a")
+                if not link_el:
+                    continue
+
+                title = link_el.get_text(" ", strip=True)
+                url = (link_el.get("href") or "").strip()
+
+                snippet_el = card.select_one("a.result__snippet") or card.select_one(".result__snippet")
+                snippet = snippet_el.get_text(" ", strip=True) if snippet_el else ""
+
+                if not url:
+                    continue
+
+                parsed_results.append(
+                    {
+                        "title": title,
+                        "url": url,
+                        "description": snippet,
+                        "source": "DuckDuckGo HTML",
+                    }
+                )
+
+                if len(parsed_results) >= max(1, min(int(count), 20)):
+                    break
+
+            if not parsed_results:
+                return {
+                    "success": False,
+                    "query": query,
+                    "error": "DuckDuckGo retornou zero resultados parseáveis",
+                    "results": [],
+                }
+
+            return {
+                "success": True,
+                "query": query,
+                "result_count": len(parsed_results),
+                "results": parsed_results,
+                "used_fallback": True,
+                "provider_meta": {
+                    "provider": "duckduckgo_html",
+                    "reason": "PERPLEXITY_API_KEY ausente",
+                },
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "query": query,
+                "error": f"DuckDuckGo fallback falhou: {e}",
+                "results": [],
+            }
+
+    def _search_fallback(self, query: str, reason: str = "PERPLEXITY_API_KEY ausente") -> Dict[str, Any]:
         """
         Fallback de busca quando não há API key disponível.
         Retorna resultados simulados para fins de demonstração.
@@ -228,7 +321,7 @@ class WebSearchTool:
             "used_fallback": True,
             "provider_meta": {
                 "provider": "fallback",
-                "reason": "PERPLEXITY_API_KEY ausente",
+                "reason": reason,
             },
         }
 
@@ -279,7 +372,7 @@ class WebScraperTool:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             }
 
-            response = requests.get(url, headers=headers, timeout=10)
+            response = _request_with_proxy_fallback("GET", url, headers=headers, timeout=10)
             response.raise_for_status()
 
             soup = BeautifulSoup(response.content, "html.parser")
@@ -381,7 +474,7 @@ class SteelBrowserTool:
         }
 
         try:
-            response = requests.post(self.endpoint, headers=headers, json=payload, timeout=self.timeout_s)
+            response = _request_with_proxy_fallback("POST", self.endpoint, headers=headers, json=payload, timeout=self.timeout_s)
             response.raise_for_status()
             data = response.json()
 
