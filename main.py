@@ -116,7 +116,7 @@ steel_browser = SteelBrowserTool(
     endpoint=_steel_endpoint,
 )
 scraper_tool = WebScraperTool(steel_browser=steel_browser if steel_browser.is_configured() else None)
-log(f"[SteelBrowser] configured={steel_browser.is_configured()} | endpoint={steel_browser.endpoint}")
+print(f"[SteelBrowser] configured={steel_browser.is_configured()} | endpoint={steel_browser.endpoint}", flush=True)
 market_analyzer = MarketAnalyzerTool(search_tool, scraper_tool)
 tool_executor = ToolExecutor(search_tool, scraper_tool, market_analyzer, wallet)
 
