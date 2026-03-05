@@ -12,7 +12,7 @@ from openai import OpenAI
 
 # Importar módulos do agente
 from financial_module import FinancialWallet
-from tools_module import WebSearchTool, WebScraperTool, MarketAnalyzerTool
+from tools_module import WebSearchTool, WebScraperTool, MarketAnalyzerTool, SteelBrowserTool
 from tool_executor import ToolExecutor
 
 
@@ -91,7 +91,11 @@ oa = OpenAI(api_key=OPENAI_API_KEY)
 # Inicializar módulos do agente
 wallet = FinancialWallet(wallet_file="agent_wallet.json")
 search_tool = WebSearchTool(api_key=os.environ.get("PERPLEXITY_API_KEY"))
-scraper_tool = WebScraperTool()
+steel_browser = SteelBrowserTool(
+    api_key=os.environ.get("STEEL_BROWSER_API_KEY"),
+    endpoint=os.environ.get("STEEL_BROWSER_ENDPOINT"),
+)
+scraper_tool = WebScraperTool(steel_browser=steel_browser if steel_browser.is_configured() else None)
 market_analyzer = MarketAnalyzerTool(search_tool, scraper_tool)
 tool_executor = ToolExecutor(search_tool, scraper_tool, market_analyzer, wallet)
 
