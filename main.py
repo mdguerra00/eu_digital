@@ -42,7 +42,10 @@ TASK_PROMPT_ENV = os.environ.get("TASK_PROMPT", "").strip()
 
 MEMORY_WINDOW = int(os.environ.get("MEMORY_WINDOW", "10"))
 MODEL = os.environ.get("MODEL", "gpt-4.1-mini")
-AGENT_MODE = os.environ.get("AGENT_MODE", "simulation").strip().lower()
+AGENT_MODE = os.environ.get("AGENT_MODE", "real").strip().lower()
+if AGENT_MODE not in {"real", "simulation"}:
+    print(f"[AVISO] AGENT_MODE inválido: {AGENT_MODE!r}. Usando 'real'.")
+    AGENT_MODE = "real"
 
 TEMPERATURE = float(os.environ.get("TEMPERATURE", "0.4"))
 REQUEST_TIMEOUT_S = float(os.environ.get("REQUEST_TIMEOUT_S", "60"))
