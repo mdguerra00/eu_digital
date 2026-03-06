@@ -72,12 +72,6 @@ CYCLE_NUMBER_COL = os.environ.get("CYCLE_NUMBER_COL", "cycle_number")
 FOCUS_COL = os.environ.get("FOCUS_COL", "focus")
 RECEIPTS_TABLE = os.environ.get("EXECUTION_RECEIPTS_TABLE", "execution_receipts")
 _receipts_table_disabled = False
-RECEIPTS_FALLBACK_ALERT_THRESHOLD = int(os.environ.get("RECEIPTS_FALLBACK_ALERT_THRESHOLD", "1"))
-RECEIPTS_ALERT_WEBHOOK_URL = os.environ.get("RECEIPTS_ALERT_WEBHOOK_URL", "").strip()
-RECEIPTS_RECHECK_INTERVAL_SECONDS = int(os.environ.get("RECEIPTS_RECHECK_INTERVAL_SECONDS", "60"))
-_receipts_fallback_cycles = 0
-_receipts_last_fallback_reason_code = "unknown"
-_receipts_table_disabled_since = None
 CREATOR_MESSAGES_TABLE = os.environ.get("CREATOR_MESSAGES_TABLE", "creator_messages")
 
 # --- Carregamento do Estatuto ---
@@ -787,24 +781,13 @@ def _write_execution_receipt(
     used_fallback: bool,
     idempotency_key: str,
 ) -> None:
-    global _receipts_table_disabled, _receipts_last_fallback_reason_code, _receipts_table_disabled_since
+    global _receipts_table_disabled
 
     started_at = utc_now_iso()
     finished_at = utc_now_iso()
     status = "success" if tool_output.get("success") else "failed"
     raw_output = json.dumps(tool_output, ensure_ascii=False)
     evidence_hash = hashlib.sha256(raw_output.encode("utf-8")).hexdigest()
-
-    started_dt = parse_datetime(tool_output.get("started_at")) or utc_now_dt()
-    finished_dt = parse_datetime(tool_output.get("finished_at")) or utc_now_dt()
-    latency_ms = max(0, int((finished_dt - started_dt).total_seconds() * 1000))
-    chars_captured = int(
-        tool_output.get("text_length")
-        or len((tool_output.get("text") or "").strip())
-        or len((tool_output.get("raw_answer") or "").strip())
-    )
-    final_url = tool_output.get("url") or tool_output.get("top_result_url")
-    fallback_reason = str(tool_output.get("error") or tool_output.get("steel_error") or "").strip() or None
 
     receipt = {
         "run_id": run_id,
@@ -818,227 +801,34 @@ def _write_execution_receipt(
         "raw_output": tool_output,
         "evidence_hash": evidence_hash,
         "used_fallback": used_fallback,
-        "fallback_reason": fallback_reason,
-        "fallback_reason_code": "tool_fallback" if used_fallback else None,
-        "latency_ms": latency_ms,
-        "chars_captured": chars_captured,
-        "final_url": final_url,
         "idempotency_key": idempotency_key,
     }
 
-    if _should_try_receipts_supabase():
+    if sb is not None and not _receipts_table_disabled:
         try:
             sb.table(RECEIPTS_TABLE).insert(receipt).execute()
             return
         except Exception as e:
-            reason_code = _classify_receipts_supabase_error(e)
-            _receipts_last_fallback_reason_code = reason_code
             # Railway/Supabase pode não ter a tabela de receipts criada ainda.
             # Nesse caso, fazemos fallback para arquivo local e evitamos falhar o ciclo.
-            if reason_code in {"table_missing", "schema_mismatch"}:
+            if "PGRST205" in repr(e) or RECEIPTS_TABLE in repr(e):
                 _receipts_table_disabled = True
-                _receipts_table_disabled_since = utc_now_dt()
                 log(
                     f"Aviso: tabela de receipts '{RECEIPTS_TABLE}' indisponível no Supabase. "
                     "Usando fallback local (execution_receipts.jsonl)."
                 )
             else:
                 log("Aviso: falha ao gravar receipt no Supabase:", repr(e))
-            receipt["fallback_reason_code"] = reason_code
 
     receipts_file = Path("execution_receipts.jsonl")
     with open(receipts_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(receipt, ensure_ascii=False) + "\n")
 
 
-def _classify_receipts_supabase_error(error: Exception) -> str:
-    msg = repr(error).lower()
-
-    if "pgrst205" in msg or (RECEIPTS_TABLE.lower() in msg and "does not exist" in msg):
-        return "table_missing"
-    if "permission denied" in msg or "42501" in msg:
-        return "grants_missing"
-    if "rls" in msg or "policy" in msg:
-        return "rls_denied"
-    if "timeout" in msg or "connection" in msg or "dns" in msg:
-        return "network"
-    if "schema" in msg or "column" in msg:
-        return "schema_mismatch"
-    return "unknown"
-
-
-
-
-def _should_try_receipts_supabase() -> bool:
-    """Define quando devemos tentar usar a tabela no Supabase novamente."""
-    global _receipts_table_disabled, _receipts_table_disabled_since
-
-    if sb is None:
-        return False
-
-    if not _receipts_table_disabled:
-        return True
-
-    if _receipts_table_disabled_since is None:
-        _receipts_table_disabled_since = utc_now_dt()
-        return False
-
-    elapsed = (utc_now_dt() - _receipts_table_disabled_since).total_seconds()
-    if elapsed >= max(5, RECEIPTS_RECHECK_INTERVAL_SECONDS):
-        _receipts_table_disabled = False
-        _receipts_table_disabled_since = None
-        log(
-            f"[Receipts] Nova tentativa no Supabase apos cooldown de {int(elapsed)}s."
-        )
-        return True
-
-    return False
-
-
-def _send_receipts_fallback_alert(reason: str, fallback_count: int) -> None:
-    payload = {
-        "text": (
-            f"[ALERTA][{AGENT_NAME}] execution_receipts em fallback local por {fallback_count} ciclo(s). "
-            f"Motivo: {reason}."
-        ),
-        "agent_name": AGENT_NAME,
-        "fallback_cycles": fallback_count,
-        "reason": reason,
-        "reason_code": _receipts_last_fallback_reason_code,
-    }
-    log(payload["text"])
-
-    if not RECEIPTS_ALERT_WEBHOOK_URL:
-        return
-
-    try:
-        import requests
-        requests.post(RECEIPTS_ALERT_WEBHOOK_URL, json=payload, timeout=8)
-    except Exception as e:
-        log(f"Aviso: falha ao enviar alerta de receipts para webhook: {repr(e)}")
-
-
-def replay_local_receipts_to_supabase(max_rows: int = 500) -> int:
-    """Reenvia receipts locais para Supabase quando a tabela voltar a ficar disponível."""
-    global _receipts_table_disabled, _receipts_table_disabled_since
-
-    if not _should_try_receipts_supabase():
-        return 0
-
-    receipts_file = Path("execution_receipts.jsonl")
-    if not receipts_file.exists():
-        return 0
-
-    try:
-        with open(receipts_file, "r", encoding="utf-8") as f:
-            lines = [line.strip() for line in f if line.strip()]
-    except Exception as e:
-        log("Aviso: falha ao abrir execution_receipts.jsonl para replay:", repr(e))
-        return 0
-
-    if not lines:
-        return 0
-
-    replayed = 0
-    for line in lines[:max_rows]:
-        try:
-            row = json.loads(line)
-        except Exception:
-            continue
-
-        idempotency_key = row.get("idempotency_key")
-        if not idempotency_key:
-            continue
-
-        if _receipt_already_exists(idempotency_key):
-            replayed += 1
-            continue
-
-        try:
-            sb.table(RECEIPTS_TABLE).insert(row).execute()
-            replayed += 1
-        except Exception as e:
-            # se falhar, interrompe e mantém arquivo para novas tentativas
-            if "PGRST205" in repr(e) or RECEIPTS_TABLE in repr(e):
-                _receipts_table_disabled = True
-                _receipts_table_disabled_since = utc_now_dt()
-            log("Aviso: falha durante replay de execution_receipts.jsonl:", repr(e))
-            break
-
-    if replayed > 0:
-        log(f"[ReceiptsReplay] replay concluído: {replayed} receipt(s) reenviados.")
-
-    return replayed
-
-
-def _append_receipts_cycle_metric(
-    *,
-    cycle_number: int,
-    receipts_attempted: int,
-    fallback_active: bool,
-    fallback_reason_code: str,
-) -> None:
-    metrics_file = Path("receipts_cycle_metrics.jsonl")
-    row = {
-        "timestamp": utc_now_iso(),
-        "cycle_number": cycle_number,
-        "receipts_attempted": receipts_attempted,
-        "fallback_active": fallback_active,
-        "fallback_reason_code": fallback_reason_code,
-    }
-    with open(metrics_file, "a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-
-def _compute_daily_receipts_metrics(window_hours: int = 24) -> Dict[str, Any]:
-    metrics_file = Path("receipts_cycle_metrics.jsonl")
-    if not metrics_file.exists():
-        return {
-            "window_hours": window_hours,
-            "cycles": 0,
-            "pct_cycles_with_receipts_in_db": 0.0,
-            "pct_cycles_with_local_fallback": 0.0,
-        }
-
-    now = utc_now_dt()
-    min_dt = now - timedelta(hours=window_hours)
-    rows: List[Dict[str, Any]] = []
-    with open(metrics_file, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-                ts = parse_datetime(row.get("timestamp"))
-                if ts and ts >= min_dt:
-                    rows.append(row)
-            except Exception:
-                continue
-
-    if not rows:
-        return {
-            "window_hours": window_hours,
-            "cycles": 0,
-            "pct_cycles_with_receipts_in_db": 0.0,
-            "pct_cycles_with_local_fallback": 0.0,
-        }
-
-    cycles = len(rows)
-    fallback_cycles = sum(1 for r in rows if r.get("fallback_active"))
-    ok_cycles = cycles - fallback_cycles
-    return {
-        "window_hours": window_hours,
-        "cycles": cycles,
-        "pct_cycles_with_receipts_in_db": round((ok_cycles / cycles) * 100, 2),
-        "pct_cycles_with_local_fallback": round((fallback_cycles / cycles) * 100, 2),
-    }
-
-
 def _receipt_already_exists(idempotency_key: str) -> bool:
-    global _receipts_table_disabled, _receipts_last_fallback_reason_code, _receipts_table_disabled_since
+    global _receipts_table_disabled
 
-    if _should_try_receipts_supabase():
+    if sb is not None and not _receipts_table_disabled:
         try:
             res = (
                 sb.table(RECEIPTS_TABLE)
@@ -1049,11 +839,8 @@ def _receipt_already_exists(idempotency_key: str) -> bool:
             )
             return bool(res.data)
         except Exception as e:
-            reason_code = _classify_receipts_supabase_error(e)
-            _receipts_last_fallback_reason_code = reason_code
-            if reason_code in {"table_missing", "schema_mismatch"}:
+            if "PGRST205" in repr(e) or RECEIPTS_TABLE in repr(e):
                 _receipts_table_disabled = True
-                _receipts_table_disabled_since = utc_now_dt()
                 log(
                     f"Aviso: tabela de receipts '{RECEIPTS_TABLE}' indisponível no Supabase durante consulta. "
                     "Usando fallback local (execution_receipts.jsonl)."
@@ -1257,14 +1044,10 @@ Entregue JSON puro no formato:
 # Core cycle
 # -----------------------------
 def run_once(run_id: str) -> Dict[str, Any]:
-    global _receipts_fallback_cycles
     cycle_started_at = utc_now_dt()
 
     # Lê prompt base do agent_state
     task_prompt = get_current_task_prompt()
-
-    # Tenta replay de receipts locais quando Supabase estiver disponível
-    replay_local_receipts_to_supabase(max_rows=200)
 
     # Lê mensagens pendentes do Criador e enriquece o prompt
     creator_msgs = fetch_pending_creator_messages()
@@ -1295,6 +1078,7 @@ def run_once(run_id: str) -> Dict[str, Any]:
     # Assim os resultados reais entram no registro do ciclo
     # -------------------------------------------------------
     tool_results_summary = ""
+    _cycle_partial_real = False
     tool_execution: Dict[str, Any] = {"tools_executed": [], "insights": [], "errors": []}
 
     try:
@@ -1318,7 +1102,6 @@ def run_once(run_id: str) -> Dict[str, Any]:
 
         # Gravar receipts e construir resumo dos resultados
         summary_parts = []
-        receipts_attempted = 0
         for tool_result in tool_execution["tools_executed"]:
             tool_name = tool_result.get("tool", "unknown")
             success = tool_result.get("success", False)
@@ -1342,10 +1125,6 @@ def run_once(run_id: str) -> Dict[str, Any]:
                     part += "URLs: " + " | ".join(urls[:3]) + "\n"
                 if enrich_text:
                     part += f"Conteudo scraping ({enrich.get('url','')}):\n{enrich_text[:600]}\n"
-                for extra_scrape in tool_result.get("extra_scrapes", [])[:2]:
-                    extra_text = (extra_scrape.get("text") or "").strip()
-                    if extra_text:
-                        part += f"Fonte textual extra ({extra_scrape.get('url','')}):\n{extra_text[:400]}\n"
                 summary_parts.append(part.strip())
 
             elif tool_name == "market_analyzer" and success:
@@ -1370,16 +1149,6 @@ def run_once(run_id: str) -> Dict[str, Any]:
                 text = (tool_result.get("text") or tool_result.get("title") or "").strip()
                 summary_parts.append(f"[web_scraper: {url!r}]\n{text[:800]}")
 
-            elif tool_name.startswith("affiliate."):
-                summary = (tool_result.get("summary") or tool_result.get("promo_text") or "").strip()
-                error = (tool_result.get("error") or "").strip()
-                if summary:
-                    summary_parts.append(f"[{tool_name}]\n{summary[:800]}")
-                elif error:
-                    summary_parts.append(f"[{tool_name}: sem links] {error[:200]}")
-                else:
-                    summary_parts.append(f"[{tool_name}: retornou vazio]")
-
             elif not success:
                 summary_parts.append(f"[{tool_name}: ERRO] {tool_result.get('error','desconhecido')}")
 
@@ -1393,7 +1162,6 @@ def run_once(run_id: str) -> Dict[str, Any]:
             if _receipt_already_exists(idempotency_key):
                 log(f"  - receipt ja existe ({idempotency_key[:12]}...), pulando")
             else:
-                receipts_attempted += 1
                 _write_execution_receipt(
                     run_id=run_id,
                     cycle_number=cycle_number,
@@ -1405,32 +1173,13 @@ def run_once(run_id: str) -> Dict[str, Any]:
                     idempotency_key=idempotency_key,
                 )
 
-            if _receipts_table_disabled:
-                _receipts_fallback_cycles += 1
-                if _receipts_fallback_cycles >= RECEIPTS_FALLBACK_ALERT_THRESHOLD:
-                    _send_receipts_fallback_alert(
-                        reason=f"Tabela {RECEIPTS_TABLE} indisponível.",
-                        fallback_count=_receipts_fallback_cycles,
-                    )
-            else:
-                _receipts_fallback_cycles = 0
-
             if AGENT_MODE == "real" and bool(tool_result.get("used_fallback", False)):
-                raise RuntimeError(f"Fallback detectado em modo real para tool={tool_name}")
-
-        _append_receipts_cycle_metric(
-            cycle_number=cycle_number,
-            receipts_attempted=receipts_attempted,
-            fallback_active=_receipts_table_disabled,
-            fallback_reason_code=_receipts_last_fallback_reason_code,
-        )
-        daily_metrics = _compute_daily_receipts_metrics(window_hours=24)
-        log(
-            "[ReceiptsMetrics24h] "
-            f"cycles={daily_metrics['cycles']} | "
-            f"in_db={daily_metrics['pct_cycles_with_receipts_in_db']}% | "
-            f"fallback_local={daily_metrics['pct_cycles_with_local_fallback']}%"
-        )
+                # Não derruba o ciclo — marca como partial_real e continua.
+                log(
+                    f"[AGENT_MODE=real] Fallback detectado em tool={tool_name} — "
+                    "ciclo marcado como partial_real. Execução continua."
+                )
+                _cycle_partial_real = True
 
         if tool_execution["insights"]:
             log(f"Insights: {len(tool_execution['insights'])}")
@@ -1467,6 +1216,7 @@ def run_once(run_id: str) -> Dict[str, Any]:
         REFLECTION_COL: llm_out["reflection"],
         NEXT_ACTIONS_COL: llm_out["next_actions"],
         PLAN_COL: llm_out.get("execution_plan", []),
+        "notes": "partial_real" if _cycle_partial_real else AGENT_MODE,
     }
 
     saved = write_cycle(row)
