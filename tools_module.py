@@ -518,16 +518,30 @@ class SteelBrowserTool:
             response.raise_for_status()
             data = response.json()
 
-            # Steel API retorna: {content: {text, cleaned_html}, url, status, title}
+            # LOG DIAGNOSTICO — mostra as chaves reais retornadas pelo Steel
+            top_keys = list(data.keys()) if isinstance(data, dict) else f"tipo={type(data)}"
+            content_obj_keys = list(data.get("content", {}).keys()) if isinstance(data.get("content"), dict) else "N/A"
+            print(f"[SteelBrowser] resposta keys={top_keys} | content_keys={content_obj_keys}", flush=True)
+
+            # Tentar todos os campos possíveis
             content_obj = data.get("content") or {}
             text = (
                 content_obj.get("text")
                 or content_obj.get("cleaned_html")
+                or content_obj.get("html")
                 or data.get("text")
+                or data.get("content") if isinstance(data.get("content"), str) else ""
                 or data.get("markdown")
+                or data.get("html")
+                or data.get("body")
                 or ""
             )
-            title = data.get("title") or data.get("page", {}).get("title") or "N/A"
+            title = (
+                data.get("title")
+                or (data.get("page") or {}).get("title")
+                or (data.get("metadata") or {}).get("title")
+                or "N/A"
+            )
             links = data.get("links") or []
 
             result: Dict[str, Any] = {
