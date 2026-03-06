@@ -181,6 +181,11 @@ class ToolExecutor:
                     if not result.get("success") and "Nenhum link" in str(result.get("error", "")):
                         print(f"[ToolExecutor] affiliate sem links cadastrados — fallback web_search", flush=True)
                         result = self._execute_web_search("produtos afiliados hotmart alta comissão 2026", count=5)
+                    # list_links pode retornar success=True com count=0; nesse caso,
+                    # manter o ciclo produtivo com busca pública.
+                    elif action == "list_links" and result.get("success") and int(result.get("count", 0)) == 0:
+                        print(f"[ToolExecutor] affiliate.list_links sem links ativos — fallback web_search", flush=True)
+                        result = self._execute_web_search("produtos afiliados hotmart alta comissão 2026", count=5)
                 result["step_id"] = step_id
                 result["args_input"] = args
                 result["idempotency_key"] = idempotency_key
