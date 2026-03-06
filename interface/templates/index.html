@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ agent_name }} — Dashboard</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Alpine.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'brand': '#6366f1',
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    [x-cloak] { display: none !important; }
+
+    /* Scrollbar customizada */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #030712; }
+    ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+
+    /* Animação de pulse suave para o status dot */
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+    /* Entrada de toast */
+    @keyframes slide-in {
+      from { transform: translateX(100%); opacity: 0; }
+      to   { transform: translateX(0);    opacity: 1; }
+    }
+    .toast-enter { animation: slide-in 0.3s ease-out; }
+
+    /* Chat bubble */
+    .bubble-creator {
+      background: #312e81;
+      border-radius: 18px 18px 4px 18px;
+    }
+    .bubble-agent {
+      background: #1f2937;
+      border-radius: 18px 18px 18px 4px;
+    }
+
+    /* Cycle card hover */
+    .cycle-card { transition: border-color 0.15s ease; }
+    .cycle-card:hover { border-color: #6366f1; }
+
+    /* Textarea auto-resize feel */
+    textarea { resize: none; }
+
+    /* Status badge */
+    .badge-pending   { background: #92400e; color: #fde68a; }
+    .badge-processed { background: #064e3b; color: #6ee7b7; }
+    .badge-success   { background: #052e16; color: #4ade80; }
+    .badge-failed    { background: #450a0a; color: #fca5a5; }
+    .badge-normal    { background: #1e3a5f; color: #93c5fd; }
+    .badge-high      { background: #3b1f00; color: #fdba74; }
+    .badge-urgent    { background: #450a0a; color: #fca5a5; }
+  </style>
+</head>
+
+<body
+  class="bg-gray-950 text-gray-100 min-h-screen"
+  x-data="dashboard()"
+  x-init="init()"
+>
+
+<!-- ────────────────────────────────────────────────────────────────────────
+     Header fixo
+──────────────────────────────────────────────────────────────────────────── -->
+<header class="fixed top-0 left-0 right-0 h-14 bg-gray-900 border-b border-gray-800 flex items-center px-4 z-40 gap-4">
+  <!-- Logo / nome do agente -->
+  <div class="flex items-center gap-2">
+    <span class="text-indigo-400 text-xl">&#9679;</span>
+    <span class="font-bold text-base tracking-wide" x-text="agentName"></span>
+  </div>
+
+  <!-- Status dot -->
+  <div class="flex items-center gap-1.5 text-xs text-gray-400">
+    <span
+      class="w-2 h-2 rounded-full pulse-dot"
+      :class="status.supabase_connected ? 'bg-green-500' : 'bg-yellow-500'"
+    ></span>
+    <span x-text="status.supabase_connected ? 'Supabase OK' : 'Modo local'"></span>
+  </div>
+
+  <!-- Último ciclo -->
+  <div class="hidden sm:flex items-center gap-1 text-xs text-gray-500 ml-2">
+    <span>Último ciclo:</span>
+    <span class="text-gray-300" x-text="lastCycleTime"></span>
+  </div>
+
+  <!-- Prompt atual (truncado) -->
+  <div class="hidden lg:flex flex-1 mx-4 items-center text-xs text-gray-500 truncate">
+    <span class="mr-1">Tarefa atual:</span>
+    <span class="text-indigo-300 truncate" x-text="truncate(status.current_task_prompt || '—', 80)"></span>
+  </div>
+
+  <!-- Botão refresh -->
+  <button
+    @click="refresh()"
+    :disabled="loading"
+    class="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 rounded-md transition-colors disabled:opacity-50"
+  >
+    <svg x-show="!loading" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+    </svg>
+    <svg x-show="loading" class="w-3.5 h-3.5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+    </svg>
+    Atualizar
+  </button>
+</header>
+
+
+<!-- ────────────────────────────────────────────────────────────────────────
+     Layout principal: sidebar + conteúdo
+──────────────────────────────────────────────────────────────────────────── -->
+<div class="flex pt-14 h-screen overflow-hidden">
+
+  <!-- Sidebar -->
+  <nav class="fixed top-14 left-0 bottom-0 w-16 bg-gray-900 border-r border-gray-800 flex flex-col items-center py-4 gap-1 z-30">
+    <template x-for="tab in tabs" :key="tab.id">
+      <button
+        @click="activeTab = tab.id"
+        :title="tab.label"
+        class="w-12 h-12 rounded-xl flex flex-col items-center justify-center gap-0.5 text-xs transition-colors"
+        :class="activeTab === tab.id
+          ? 'bg-indigo-600 text-white'
+          : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'"
+      >
+        <span class="text-lg leading-none" x-text="tab.icon"></span>
+        <span class="text-[10px]" x-text="tab.label"></span>
+      </button>
+    </template>
+  </nav>
+
+  <!-- Área de conteúdo -->
+  <main class="ml-16 flex-1 overflow-auto">
+
+    <!-- ─────── TAB: Dashboard ─────── -->
+    <div x-show="activeTab === 'dashboard'" x-cloak class="p-6 space-y-6">
+      <h2 class="text-xl font-semibold text-gray-100">Dashboard</h2>
+
+      <!-- Cards de métricas rápidas -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+          <p class="text-xs text-gray-400 mb-1">Total de ciclos</p>
+          <p class="text-2xl font-bold text-indigo-400" x-text="cycles.length > 0 ? (cycles[0].cycle_number || cycles.length) : 0"></p>
+        </div>
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+          <p class="text-xs text-gray-400 mb-1">Receita total</p>
+          <p class="text-2xl font-bold text-green-400" x-text="'R$ ' + (wallet.total_revenue || 0).toFixed(2)"></p>
+        </div>
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+          <p class="text-xs text-gray-400 mb-1">Saldo agente</p>
+          <p class="text-2xl font-bold text-blue-400" x-text="'R$ ' + (wallet.agent_balance || 0).toFixed(2)"></p>
+        </div>
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+          <p class="text-xs text-gray-400 mb-1">Msgs pendentes</p>
+          <p class="text-2xl font-bold text-amber-400" x-text="messages.filter(m => m.status === 'pending').length"></p>
+        </div>
+      </div>
+
+      <!-- Último ciclo -->
+      <div x-show="lastCycle" class="bg-gray-900 rounded-xl border border-gray-800 p-5 space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="font-semibold text-gray-200">
+            Ciclo mais recente
+            <span class="ml-2 text-xs text-gray-500 font-normal"
+                  x-text="'#' + (lastCycle?.cycle_number || '?') + ' · ' + formatDate(lastCycle?.created_at)"></span>
+          </h3>
+          <span
+            class="text-xs px-2 py-0.5 rounded-full"
+            :class="lastCycle?.notes === 'real' ? 'bg-green-900 text-green-300' : 'bg-gray-800 text-gray-400'"
+            x-text="lastCycle?.notes || 'simulation'"
+          ></span>
+        </div>
+
+        <div>
+          <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Resultado</p>
+          <p class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap"
+             x-text="truncate(lastCycle?.result_text || '', 600)"></p>
+          <button
+            x-show="(lastCycle?.result_text || '').length > 600"
+            @click="activeTab = 'ciclos'"
+            class="text-xs text-indigo-400 hover:text-indigo-300 mt-1"
+          >Ver ciclo completo →</button>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-gray-800">
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Reflexão</p>
+            <p class="text-sm text-gray-400" x-text="truncate(lastCycle?.reflection || '—', 200)"></p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Próximas ações</p>
+            <p class="text-sm text-gray-400" x-text="truncate(lastCycle?.next_actions || '—', 200)"></p>
+          </div>
+        </div>
+      </div>
+      <div x-show="!lastCycle" class="bg-gray-900 rounded-xl border border-gray-800 p-8 text-center text-gray-500">
+        Nenhum ciclo encontrado. O agente ainda não executou nenhum ciclo.
+      </div>
+
+      <!-- Tarefa atual -->
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-5">
+        <p class="text-xs text-gray-500 uppercase tracking-wider mb-2">Tarefa atual do agente</p>
+        <p class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap"
+           x-text="status.current_task_prompt || 'Não encontrado.'"></p>
+      </div>
+
+      <!-- Atalhos rápidos -->
+      <div class="flex flex-wrap gap-3">
+        <button @click="activeTab = 'mensagens'"
+          class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm transition-colors">
+          Enviar mensagem ao agente
+        </button>
+        <button @click="activeTab = 'ciclos'"
+          class="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">
+          Ver todos os ciclos
+        </button>
+        <button @click="activeTab = 'carteira'"
+          class="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors">
+          Ver carteira
+        </button>
+      </div>
+    </div>
+
+
+    <!-- ─────── TAB: Ciclos ─────── -->
+    <div x-show="activeTab === 'ciclos'" x-cloak class="p-6 space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-xl font-semibold text-gray-100">Ciclos de execução</h2>
+        <span class="text-xs text-gray-500" x-text="cycles.length + ' ciclos carregados'"></span>
+      </div>
+
+      <div x-show="cycles.length === 0" class="bg-gray-900 rounded-xl border border-gray-800 p-8 text-center text-gray-500">
+        Nenhum ciclo encontrado.
+      </div>
+
+      <div class="space-y-3">
+        <template x-for="cycle in cycles" :key="cycle.id">
+          <div
+            class="cycle-card bg-gray-900 rounded-xl border border-gray-800 overflow-hidden"
+          >
+            <!-- Header do ciclo -->
+            <button
+              @click="expandedCycle = (expandedCycle === cycle.id ? null : cycle.id)"
+              class="w-full flex items-start justify-between p-4 text-left"
+            >
+              <div class="flex items-center gap-3 min-w-0">
+                <span class="text-indigo-400 font-mono text-sm font-bold flex-shrink-0"
+                      x-text="'#' + (cycle.cycle_number || '?')"></span>
+                <div class="min-w-0">
+                  <p class="text-sm text-gray-200 truncate"
+                     x-text="truncate(cycle.result_text || 'Sem resultado', 100)"></p>
+                  <p class="text-xs text-gray-500 mt-0.5" x-text="formatDate(cycle.created_at)"></p>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 flex-shrink-0 ml-3">
+                <span
+                  class="text-[10px] px-2 py-0.5 rounded-full"
+                  :class="cycle.notes === 'real' ? 'bg-green-900 text-green-300' : 'bg-gray-800 text-gray-400'"
+                  x-text="cycle.notes || 'sim'"
+                ></span>
+                <svg
+                  class="w-4 h-4 text-gray-500 transition-transform"
+                  :class="expandedCycle === cycle.id ? 'rotate-180' : ''"
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </button>
+
+            <!-- Detalhes expandidos -->
+            <div
+              x-show="expandedCycle === cycle.id"
+              x-transition
+              class="border-t border-gray-800 p-4 space-y-4 bg-gray-950"
+            >
+              <!-- Foco e task_prompt -->
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Foco</p>
+                  <p class="text-xs text-gray-400" x-text="cycle.focus || '—'"></p>
+                </div>
+                <div>
+                  <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Task Prompt</p>
+                  <p class="text-xs text-gray-400" x-text="truncate(cycle.task_prompt || '—', 300)"></p>
+                </div>
+              </div>
+
+              <!-- Resultado completo -->
+              <div>
+                <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Resultado completo</p>
+                <div class="bg-gray-900 rounded-lg p-3 text-xs text-gray-300 leading-relaxed whitespace-pre-wrap max-h-96 overflow-auto"
+                     x-text="cycle.result_text || '—'"></div>
+              </div>
+
+              <!-- Reflexão + Próximas ações -->
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Reflexão</p>
+                  <div class="bg-gray-900 rounded-lg p-3 text-xs text-gray-400 leading-relaxed whitespace-pre-wrap max-h-48 overflow-auto"
+                       x-text="cycle.reflection || '—'"></div>
+                </div>
+                <div>
+                  <p class="text-xs text-gray-500 uppercase tracking-wider mb-1">Próximas ações</p>
+                  <div class="bg-gray-900 rounded-lg p-3 text-xs text-gray-400 leading-relaxed whitespace-pre-wrap max-h-48 overflow-auto"
+                       x-text="cycle.next_actions || '—'"></div>
+                </div>
+              </div>
+
+              <!-- run_id -->
+              <p class="text-[10px] text-gray-600 font-mono" x-text="'run_id: ' + (cycle.run_id || '—')"></p>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+
+    <!-- ─────── TAB: Mensagens (Chat) ─────── -->
+    <div x-show="activeTab === 'mensagens'" x-cloak class="flex flex-col h-full">
+
+      <!-- Cabeçalho da conversa -->
+      <div class="flex-shrink-0 px-6 py-4 border-b border-gray-800 bg-gray-900">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="font-semibold text-gray-100">Conversa com o agente</h2>
+            <p class="text-xs text-gray-500 mt-0.5">
+              Suas mensagens são injetadas no próximo ciclo como instrução prioritária
+            </p>
+          </div>
+          <div class="text-xs text-gray-500">
+            <span x-text="messages.length"></span> mensagens
+          </div>
+        </div>
+      </div>
+
+      <!-- Lista de mensagens -->
+      <div
+        class="flex-1 overflow-y-auto p-6 space-y-4"
+        x-ref="chatScroll"
+      >
+        <div x-show="messages.length === 0" class="text-center text-gray-600 text-sm py-12">
+          Nenhuma mensagem ainda. Escreva abaixo para interagir com o agente.
+        </div>
+
+        <template x-for="msg in messages" :key="msg.id || msg.created_at">
+          <div class="flex flex-col" :class="msg.author === 'Criador' ? 'items-end' : 'items-start'">
+            <!-- Rótulo -->
+            <div class="flex items-center gap-2 mb-1 px-1">
+              <span class="text-xs text-gray-500" x-text="msg.author || 'Agente'"></span>
+              <span
+                class="text-[10px] px-1.5 py-0.5 rounded-full"
+                :class="{
+                  'badge-urgent': msg.priority === 'urgent',
+                  'badge-high': msg.priority === 'high',
+                  'badge-normal': msg.priority === 'normal' || !msg.priority
+                }"
+                x-text="msg.priority || 'normal'"
+              ></span>
+              <span class="text-[10px] text-gray-600" x-text="formatDateShort(msg.created_at)"></span>
+            </div>
+
+            <!-- Balão -->
+            <div
+              class="max-w-lg px-4 py-2.5 text-sm leading-relaxed"
+              :class="msg.author === 'Criador' ? 'bubble-creator text-blue-100' : 'bubble-agent text-gray-300'"
+              x-text="msg.message"
+            ></div>
+
+            <!-- Status da mensagem -->
+            <div x-show="msg.status" class="mt-1 px-1">
+              <span
+                class="text-[10px] px-2 py-0.5 rounded-full"
+                :class="msg.status === 'processed' ? 'badge-processed' : 'badge-pending'"
+                x-text="msg.status === 'processed' ? ('Processado no ciclo #' + (msg.cycle_number || '?')) : 'Aguardando ciclo'"
+              ></span>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Caixa de envio -->
+      <div class="flex-shrink-0 border-t border-gray-800 bg-gray-900 p-4">
+        <div class="max-w-3xl mx-auto space-y-3">
+          <!-- Seletor de prioridade -->
+          <div class="flex items-center gap-2 text-xs">
+            <span class="text-gray-500">Prioridade:</span>
+            <template x-for="p in ['normal', 'high', 'urgent']" :key="p">
+              <button
+                @click="newPriority = p"
+                class="px-2.5 py-1 rounded-full border transition-colors"
+                :class="newPriority === p
+                  ? 'border-indigo-500 bg-indigo-900 text-indigo-300'
+                  : 'border-gray-700 text-gray-500 hover:border-gray-600 hover:text-gray-400'"
+                x-text="p"
+              ></button>
+            </template>
+            <span class="ml-auto text-gray-600 text-[10px]">
+              "urgent" = executado imediatamente no próximo ciclo
+            </span>
+          </div>
+
+          <!-- Textarea + botão -->
+          <div class="flex gap-3">
+            <textarea
+              x-model="newMessage"
+              @keydown.enter.ctrl.prevent="sendMessage()"
+              placeholder="Escreva uma instrução para o agente... (Ctrl+Enter para enviar)"
+              rows="3"
+              class="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-indigo-500 transition-colors"
+            ></textarea>
+            <button
+              @click="sendMessage()"
+              :disabled="!newMessage.trim() || sending"
+              class="flex-shrink-0 px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-sm font-medium transition-colors"
+            >
+              <span x-show="!sending">Enviar</span>
+              <span x-show="sending">...</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ─────── TAB: Carteira ─────── -->
+    <div x-show="activeTab === 'carteira'" x-cloak class="p-6 space-y-6">
+      <h2 class="text-xl font-semibold text-gray-100">Carteira financeira</h2>
+
+      <!-- Saldos -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-5">
+          <p class="text-xs text-gray-500 uppercase tracking-wider mb-2">Saldo do agente (20%)</p>
+          <p class="text-3xl font-bold text-blue-400"
+             x-text="'R$ ' + (wallet.agent_balance || 0).toFixed(2)"></p>
+          <p class="text-xs text-gray-600 mt-1">Reservado para reinvestimento</p>
+        </div>
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-5">
+          <p class="text-xs text-gray-500 uppercase tracking-wider mb-2">Saldo do criador (80%)</p>
+          <p class="text-3xl font-bold text-green-400"
+             x-text="'R$ ' + (wallet.creator_balance || 0).toFixed(2)"></p>
+          <p class="text-xs text-gray-600 mt-1">Para saque / retirada</p>
+        </div>
+        <div class="bg-gray-900 rounded-xl border border-gray-800 p-5">
+          <p class="text-xs text-gray-500 uppercase tracking-wider mb-2">Receita total</p>
+          <p class="text-3xl font-bold text-indigo-400"
+             x-text="'R$ ' + (wallet.total_revenue || 0).toFixed(2)"></p>
+          <div class="flex justify-between mt-2 text-xs text-gray-500">
+            <span>Despesas: <span class="text-red-400" x-text="'R$ ' + (wallet.total_expenses || 0).toFixed(2)"></span></span>
+            <span>Reserva mín: <span class="text-gray-400" x-text="'R$ ' + (wallet.minimum_reserve || 0).toFixed(2)"></span></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Divisão 80/20 info -->
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-5">
+        <p class="text-sm font-medium text-gray-300 mb-3">Divisão de lucros (Estatuto)</p>
+        <div class="flex gap-2 items-center">
+          <div class="flex-1 bg-gray-800 rounded-full h-4 overflow-hidden">
+            <div
+              class="h-full bg-green-500 rounded-full transition-all"
+              :style="'width: 80%'"
+            ></div>
+          </div>
+          <span class="text-xs text-gray-400 w-24">80% Criador</span>
+        </div>
+        <div class="flex gap-2 items-center mt-2">
+          <div class="flex-1 bg-gray-800 rounded-full h-4 overflow-hidden">
+            <div
+              class="h-full bg-blue-500 rounded-full transition-all"
+              :style="'width: 20%'"
+            ></div>
+          </div>
+          <span class="text-xs text-gray-400 w-24">20% Agente</span>
+        </div>
+      </div>
+
+      <!-- Nenhuma transação ainda -->
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-8 text-center text-gray-500 text-sm">
+        Histórico de transações disponível quando o agente registrar receitas via Supabase.
+      </div>
+    </div>
+
+
+    <!-- ─────── TAB: Recibos ─────── -->
+    <div x-show="activeTab === 'recibos'" x-cloak class="p-6 space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-xl font-semibold text-gray-100">Recibos de execução</h2>
+        <button
+          @click="loadReceipts()"
+          class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded-md transition-colors"
+        >Carregar recibos</button>
+      </div>
+
+      <p class="text-xs text-gray-500">
+        Trilha de auditoria imutável — cada tool executada gera um recibo com hash SHA-256.
+      </p>
+
+      <div x-show="receipts.length === 0" class="bg-gray-900 rounded-xl border border-gray-800 p-8 text-center text-gray-500">
+        Nenhum recibo carregado. Clique em "Carregar recibos".
+      </div>
+
+      <!-- Tabela de recibos -->
+      <div x-show="receipts.length > 0" class="overflow-x-auto">
+        <table class="w-full text-xs text-gray-400 border-collapse">
+          <thead>
+            <tr class="border-b border-gray-800 text-gray-500 uppercase tracking-wider">
+              <th class="text-left py-2 px-3">Ciclo</th>
+              <th class="text-left py-2 px-3">Tool</th>
+              <th class="text-left py-2 px-3">Step</th>
+              <th class="text-left py-2 px-3">Status</th>
+              <th class="text-left py-2 px-3">Fallback</th>
+              <th class="text-left py-2 px-3">Iniciado em</th>
+              <th class="text-left py-2 px-3">Hash</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="r in receipts" :key="r.id || r.evidence_hash">
+              <tr class="border-b border-gray-900 hover:bg-gray-900 transition-colors">
+                <td class="py-2 px-3 font-mono text-indigo-400" x-text="r.cycle_number || '—'"></td>
+                <td class="py-2 px-3 font-mono text-gray-300" x-text="r.tool || '—'"></td>
+                <td class="py-2 px-3 text-gray-500" x-text="r.step_id || '—'"></td>
+                <td class="py-2 px-3">
+                  <span
+                    class="px-2 py-0.5 rounded-full text-[10px]"
+                    :class="r.status === 'success' ? 'badge-success' : 'badge-failed'"
+                    x-text="r.status || '—'"
+                  ></span>
+                </td>
+                <td class="py-2 px-3">
+                  <span x-show="r.used_fallback" class="text-amber-400">sim</span>
+                  <span x-show="!r.used_fallback" class="text-gray-600">não</span>
+                </td>
+                <td class="py-2 px-3 text-gray-500" x-text="formatDateShort(r.started_at)"></td>
+                <td class="py-2 px-3 font-mono text-[10px] text-gray-600"
+                    x-text="(r.evidence_hash || '').slice(0, 12) + '...'"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+
+    <!-- ─────── TAB: Configurações / Info ─────── -->
+    <div x-show="activeTab === 'config'" x-cloak class="p-6 space-y-6 max-w-2xl">
+      <h2 class="text-xl font-semibold text-gray-100">Informações e ajuda</h2>
+
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-5 space-y-3">
+        <h3 class="font-medium text-gray-200">Conexão</h3>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between">
+            <span class="text-gray-500">Supabase</span>
+            <span :class="status.supabase_connected ? 'text-green-400' : 'text-yellow-400'"
+                  x-text="status.supabase_connected ? 'Conectado' : 'Offline (fallback local)'"></span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Agente</span>
+            <span class="text-gray-300" x-text="agentName"></span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-500">Horário do servidor</span>
+            <span class="text-gray-300 font-mono text-xs" x-text="status.timestamp || '—'"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-5 space-y-3">
+        <h3 class="font-medium text-gray-200">Como usar esta interface</h3>
+        <ul class="space-y-2 text-sm text-gray-400 list-disc list-inside">
+          <li><strong class="text-gray-200">Dashboard</strong> — visão geral: último ciclo, métricas e tarefa atual.</li>
+          <li><strong class="text-gray-200">Ciclos</strong> — histórico completo de ciclos com resultados expandíveis.</li>
+          <li><strong class="text-gray-200">Mensagens</strong> — chat com o agente. Mensagens são injetadas no próximo ciclo.</li>
+          <li><strong class="text-gray-200">Carteira</strong> — saldo e divisão de lucros 80/20.</li>
+          <li><strong class="text-gray-200">Recibos</strong> — auditoria de ferramentas executadas.</li>
+        </ul>
+      </div>
+
+      <div class="bg-indigo-950 rounded-xl border border-indigo-900 p-5">
+        <h3 class="font-medium text-indigo-300 mb-2">Solicitar mudanças de código</h3>
+        <p class="text-sm text-indigo-200/70">
+          Para solicitar alterações no código do agente (main.py, tools, etc.), descreva a mudança
+          no campo de mensagens com prioridade <strong>urgent</strong>. As mudanças de código
+          são realizadas por Claude Code na sessão ativa — cole o pedido no chat do Claude Code.
+        </p>
+      </div>
+
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-5">
+        <h3 class="font-medium text-gray-200 mb-2">Atualizações em tempo real</h3>
+        <div class="flex items-center gap-2 text-sm">
+          <span
+            class="w-2 h-2 rounded-full"
+            :class="sseConnected ? 'bg-green-500 pulse-dot' : 'bg-red-500'"
+          ></span>
+          <span class="text-gray-400"
+                x-text="sseConnected ? 'SSE conectado — novos ciclos aparecem automaticamente' : 'SSE desconectado — reconectando...'">
+          </span>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+
+<!-- ────────────────────────────────────────────────────────────────────────
+     Toasts
+──────────────────────────────────────────────────────────────────────────── -->
+<div class="fixed bottom-5 right-5 flex flex-col gap-2 z-50" style="max-width: 320px">
+  <template x-for="toast in toasts" :key="toast.id">
+    <div
+      class="toast-enter flex items-start gap-3 px-4 py-3 rounded-xl shadow-xl text-sm"
+      :class="toast.color"
+    >
+      <span x-text="toast.icon" class="flex-shrink-0"></span>
+      <span x-text="toast.msg" class="flex-1"></span>
+    </div>
+  </template>
+</div>
+
+
+<!-- ────────────────────────────────────────────────────────────────────────
+     Alpine.js logic
+──────────────────────────────────────────────────────────────────────────── -->
+<script>
+function dashboard() {
+  return {
+    agentName: '{{ agent_name }}',
+
+    tabs: [
+      { id: 'dashboard', icon: '📊', label: 'Home' },
+      { id: 'ciclos',    icon: '🔄', label: 'Ciclos' },
+      { id: 'mensagens', icon: '💬', label: 'Chat' },
+      { id: 'carteira',  icon: '💰', label: 'Wallet' },
+      { id: 'recibos',   icon: '🧾', label: 'Logs' },
+      { id: 'config',    icon: '⚙️',  label: 'Info' },
+    ],
+
+    activeTab: 'dashboard',
+    loading: false,
+    sending: false,
+    sseConnected: false,
+
+    status: {},
+    cycles: [],
+    messages: [],
+    wallet: {},
+    receipts: [],
+
+    newMessage: '',
+    newPriority: 'normal',
+    expandedCycle: null,
+    toasts: [],
+
+    // ── Lifecycle ──────────────────────────────────────────────────────────
+    async init() {
+      await this.loadAll();
+      this.connectSSE();
+      this.$watch('activeTab', (tab) => {
+        if (tab === 'mensagens') this.$nextTick(() => this.scrollChat());
+        if (tab === 'recibos' && this.receipts.length === 0) this.loadReceipts();
+      });
+    },
+
+    async loadAll() {
+      this.loading = true;
+      try {
+        await Promise.all([
+          this.loadStatus(),
+          this.loadCycles(),
+          this.loadMessages(),
+          this.loadWallet(),
+        ]);
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    // ── Data loaders ───────────────────────────────────────────────────────
+    async loadStatus() {
+      try {
+        const r = await fetch('/api/status');
+        this.status = await r.json();
+      } catch(e) { console.error('loadStatus:', e); }
+    },
+
+    async loadCycles() {
+      try {
+        const r = await fetch('/api/cycles?limit=30');
+        this.cycles = await r.json();
+      } catch(e) { console.error('loadCycles:', e); }
+    },
+
+    async loadMessages() {
+      try {
+        const r = await fetch('/api/messages?limit=100');
+        this.messages = await r.json();
+      } catch(e) { console.error('loadMessages:', e); }
+    },
+
+    async loadWallet() {
+      try {
+        const r = await fetch('/api/wallet');
+        this.wallet = await r.json();
+      } catch(e) { console.error('loadWallet:', e); }
+    },
+
+    async loadReceipts() {
+      try {
+        const r = await fetch('/api/receipts?limit=50');
+        this.receipts = await r.json();
+      } catch(e) { console.error('loadReceipts:', e); }
+    },
+
+    async refresh() {
+      await this.loadAll();
+      this.showToast('Dados atualizados', 'success');
+    },
+
+    // ── Send message ───────────────────────────────────────────────────────
+    async sendMessage() {
+      const msg = this.newMessage.trim();
+      if (!msg || this.sending) return;
+      this.sending = true;
+      try {
+        const r = await fetch('/api/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, priority: this.newPriority }),
+        });
+        const result = await r.json();
+        if (result.success) {
+          this.messages.push(result.data);
+          this.newMessage = '';
+          this.newPriority = 'normal';
+          this.showToast('Mensagem enviada!', 'success');
+          this.$nextTick(() => this.scrollChat());
+        } else {
+          this.showToast('Erro: ' + (result.error || 'falha ao enviar'), 'error');
+        }
+      } catch(e) {
+        this.showToast('Erro de rede', 'error');
+      } finally {
+        this.sending = false;
+      }
+    },
+
+    // ── SSE ────────────────────────────────────────────────────────────────
+    connectSSE() {
+      const es = new EventSource('/events');
+
+      es.onopen = () => { this.sseConnected = true; };
+
+      es.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === 'connected') {
+            this.sseConnected = true;
+          } else if (data.type === 'new_cycle') {
+            // Adiciona no topo se não existir
+            const exists = this.cycles.find(c => c.id === data.data.id);
+            if (!exists) {
+              this.cycles.unshift(data.data);
+              this.showToast('Novo ciclo #' + (data.data.cycle_number || '?'), 'info');
+              this.loadStatus();
+            }
+          } else if (data.type === 'new_message') {
+            const exists = this.messages.find(m => m.id === data.data.id);
+            if (!exists) {
+              this.messages.push(data.data);
+              if (this.activeTab === 'mensagens') this.$nextTick(() => this.scrollChat());
+            }
+          }
+        } catch(err) {
+          console.error('SSE parse:', err);
+        }
+      };
+
+      es.onerror = () => {
+        this.sseConnected = false;
+        es.close();
+        setTimeout(() => this.connectSSE(), 5000);
+      };
+    },
+
+    // ── Utils ──────────────────────────────────────────────────────────────
+    scrollChat() {
+      const el = this.$refs.chatScroll;
+      if (el) el.scrollTop = el.scrollHeight;
+    },
+
+    showToast(msg, type = 'info') {
+      const colors = {
+        info:    'bg-blue-800 text-blue-100',
+        success: 'bg-green-800 text-green-100',
+        error:   'bg-red-800 text-red-100',
+        warning: 'bg-yellow-800 text-yellow-100',
+      };
+      const icons = { info: 'ℹ️', success: '✅', error: '❌', warning: '⚠️' };
+      const id = Date.now() + Math.random();
+      this.toasts.push({
+        id,
+        msg,
+        color: colors[type] || colors.info,
+        icon: icons[type] || icons.info,
+      });
+      setTimeout(() => {
+        this.toasts = this.toasts.filter(t => t.id !== id);
+      }, 4000);
+    },
+
+    formatDate(iso) {
+      if (!iso) return '—';
+      try {
+        return new Date(iso).toLocaleString('pt-BR', {
+          day: '2-digit', month: '2-digit', year: 'numeric',
+          hour: '2-digit', minute: '2-digit',
+        });
+      } catch(e) { return iso; }
+    },
+
+    formatDateShort(iso) {
+      if (!iso) return '—';
+      try {
+        return new Date(iso).toLocaleString('pt-BR', {
+          day: '2-digit', month: '2-digit',
+          hour: '2-digit', minute: '2-digit',
+        });
+      } catch(e) { return iso; }
+    },
+
+    truncate(str, n = 200) {
+      if (!str) return '';
+      return str.length > n ? str.slice(0, n) + '…' : str;
+    },
+
+    // ── Computed ───────────────────────────────────────────────────────────
+    get lastCycle() {
+      return this.cycles[0] || null;
+    },
+
+    get lastCycleTime() {
+      if (!this.lastCycle) return 'Nenhum ciclo';
+      return this.formatDate(this.lastCycle.created_at);
+    },
+  };
+}
+</script>
+
+</body>
+</html>
