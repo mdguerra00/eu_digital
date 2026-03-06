@@ -72,9 +72,10 @@ CYCLE_NUMBER_COL = os.environ.get("CYCLE_NUMBER_COL", "cycle_number")
 FOCUS_COL = os.environ.get("FOCUS_COL", "focus")
 RECEIPTS_TABLE = os.environ.get("EXECUTION_RECEIPTS_TABLE", "execution_receipts")
 _receipts_table_disabled = False
-RECEIPTS_FALLBACK_ALERT_THRESHOLD = int(os.environ.get("RECEIPTS_FALLBACK_ALERT_THRESHOLD", "3"))
+RECEIPTS_FALLBACK_ALERT_THRESHOLD = int(os.environ.get("RECEIPTS_FALLBACK_ALERT_THRESHOLD", "1"))
 RECEIPTS_ALERT_WEBHOOK_URL = os.environ.get("RECEIPTS_ALERT_WEBHOOK_URL", "").strip()
 _receipts_fallback_cycles = 0
+_receipts_last_fallback_reason_code = "unknown"
 CREATOR_MESSAGES_TABLE = os.environ.get("CREATOR_MESSAGES_TABLE", "creator_messages")
 
 # --- Carregamento do Estatuto ---
@@ -784,7 +785,7 @@ def _write_execution_receipt(
     used_fallback: bool,
     idempotency_key: str,
 ) -> None:
-    global _receipts_table_disabled
+    global _receipts_table_disabled, _receipts_last_fallback_reason_code
 
     started_at = utc_now_iso()
     finished_at = utc_now_iso()
@@ -816,6 +817,7 @@ def _write_execution_receipt(
         "evidence_hash": evidence_hash,
         "used_fallback": used_fallback,
         "fallback_reason": fallback_reason,
+        "fallback_reason_code": "tool_fallback" if used_fallback else None,
         "latency_ms": latency_ms,
         "chars_captured": chars_captured,
         "final_url": final_url,
@@ -827,9 +829,11 @@ def _write_execution_receipt(
             sb.table(RECEIPTS_TABLE).insert(receipt).execute()
             return
         except Exception as e:
+            reason_code = _classify_receipts_supabase_error(e)
+            _receipts_last_fallback_reason_code = reason_code
             # Railway/Supabase pode não ter a tabela de receipts criada ainda.
             # Nesse caso, fazemos fallback para arquivo local e evitamos falhar o ciclo.
-            if "PGRST205" in repr(e) or RECEIPTS_TABLE in repr(e):
+            if reason_code in {"table_missing", "schema_mismatch"}:
                 _receipts_table_disabled = True
                 log(
                     f"Aviso: tabela de receipts '{RECEIPTS_TABLE}' indisponível no Supabase. "
@@ -837,10 +841,27 @@ def _write_execution_receipt(
                 )
             else:
                 log("Aviso: falha ao gravar receipt no Supabase:", repr(e))
+            receipt["fallback_reason_code"] = reason_code
 
     receipts_file = Path("execution_receipts.jsonl")
     with open(receipts_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(receipt, ensure_ascii=False) + "\n")
+
+
+def _classify_receipts_supabase_error(error: Exception) -> str:
+    msg = repr(error).lower()
+
+    if "pgrst205" in msg or (RECEIPTS_TABLE.lower() in msg and "does not exist" in msg):
+        return "table_missing"
+    if "permission denied" in msg or "42501" in msg:
+        return "grants_missing"
+    if "rls" in msg or "policy" in msg:
+        return "rls_denied"
+    if "timeout" in msg or "connection" in msg or "dns" in msg:
+        return "network"
+    if "schema" in msg or "column" in msg:
+        return "schema_mismatch"
+    return "unknown"
 
 
 def _send_receipts_fallback_alert(reason: str, fallback_count: int) -> None:
@@ -852,6 +873,7 @@ def _send_receipts_fallback_alert(reason: str, fallback_count: int) -> None:
         "agent_name": AGENT_NAME,
         "fallback_cycles": fallback_count,
         "reason": reason,
+        "reason_code": _receipts_last_fallback_reason_code,
     }
     log(payload["text"])
 
@@ -917,8 +939,72 @@ def replay_local_receipts_to_supabase(max_rows: int = 500) -> int:
     return replayed
 
 
+def _append_receipts_cycle_metric(
+    *,
+    cycle_number: int,
+    receipts_attempted: int,
+    fallback_active: bool,
+    fallback_reason_code: str,
+) -> None:
+    metrics_file = Path("receipts_cycle_metrics.jsonl")
+    row = {
+        "timestamp": utc_now_iso(),
+        "cycle_number": cycle_number,
+        "receipts_attempted": receipts_attempted,
+        "fallback_active": fallback_active,
+        "fallback_reason_code": fallback_reason_code,
+    }
+    with open(metrics_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _compute_daily_receipts_metrics(window_hours: int = 24) -> Dict[str, Any]:
+    metrics_file = Path("receipts_cycle_metrics.jsonl")
+    if not metrics_file.exists():
+        return {
+            "window_hours": window_hours,
+            "cycles": 0,
+            "pct_cycles_with_receipts_in_db": 0.0,
+            "pct_cycles_with_local_fallback": 0.0,
+        }
+
+    now = utc_now_dt()
+    min_dt = now - timedelta(hours=window_hours)
+    rows: List[Dict[str, Any]] = []
+    with open(metrics_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+                ts = parse_datetime(row.get("timestamp"))
+                if ts and ts >= min_dt:
+                    rows.append(row)
+            except Exception:
+                continue
+
+    if not rows:
+        return {
+            "window_hours": window_hours,
+            "cycles": 0,
+            "pct_cycles_with_receipts_in_db": 0.0,
+            "pct_cycles_with_local_fallback": 0.0,
+        }
+
+    cycles = len(rows)
+    fallback_cycles = sum(1 for r in rows if r.get("fallback_active"))
+    ok_cycles = cycles - fallback_cycles
+    return {
+        "window_hours": window_hours,
+        "cycles": cycles,
+        "pct_cycles_with_receipts_in_db": round((ok_cycles / cycles) * 100, 2),
+        "pct_cycles_with_local_fallback": round((fallback_cycles / cycles) * 100, 2),
+    }
+
+
 def _receipt_already_exists(idempotency_key: str) -> bool:
-    global _receipts_table_disabled
+    global _receipts_table_disabled, _receipts_last_fallback_reason_code
 
     if sb is not None and not _receipts_table_disabled:
         try:
@@ -931,7 +1017,9 @@ def _receipt_already_exists(idempotency_key: str) -> bool:
             )
             return bool(res.data)
         except Exception as e:
-            if "PGRST205" in repr(e) or RECEIPTS_TABLE in repr(e):
+            reason_code = _classify_receipts_supabase_error(e)
+            _receipts_last_fallback_reason_code = reason_code
+            if reason_code in {"table_missing", "schema_mismatch"}:
                 _receipts_table_disabled = True
                 log(
                     f"Aviso: tabela de receipts '{RECEIPTS_TABLE}' indisponível no Supabase durante consulta. "
@@ -1197,6 +1285,7 @@ def run_once(run_id: str) -> Dict[str, Any]:
 
         # Gravar receipts e construir resumo dos resultados
         summary_parts = []
+        receipts_attempted = 0
         for tool_result in tool_execution["tools_executed"]:
             tool_name = tool_result.get("tool", "unknown")
             success = tool_result.get("success", False)
@@ -1271,6 +1360,7 @@ def run_once(run_id: str) -> Dict[str, Any]:
             if _receipt_already_exists(idempotency_key):
                 log(f"  - receipt ja existe ({idempotency_key[:12]}...), pulando")
             else:
+                receipts_attempted += 1
                 _write_execution_receipt(
                     run_id=run_id,
                     cycle_number=cycle_number,
@@ -1294,6 +1384,20 @@ def run_once(run_id: str) -> Dict[str, Any]:
 
             if AGENT_MODE == "real" and bool(tool_result.get("used_fallback", False)):
                 raise RuntimeError(f"Fallback detectado em modo real para tool={tool_name}")
+
+        _append_receipts_cycle_metric(
+            cycle_number=cycle_number,
+            receipts_attempted=receipts_attempted,
+            fallback_active=_receipts_table_disabled,
+            fallback_reason_code=_receipts_last_fallback_reason_code,
+        )
+        daily_metrics = _compute_daily_receipts_metrics(window_hours=24)
+        log(
+            "[ReceiptsMetrics24h] "
+            f"cycles={daily_metrics['cycles']} | "
+            f"in_db={daily_metrics['pct_cycles_with_receipts_in_db']}% | "
+            f"fallback_local={daily_metrics['pct_cycles_with_local_fallback']}%"
+        )
 
         if tool_execution["insights"]:
             log(f"Insights: {len(tool_execution['insights'])}")
