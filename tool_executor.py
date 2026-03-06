@@ -170,6 +170,23 @@ class ToolExecutor:
                 execution_result["tools_executed"].append(result)
                 continue
 
+            if tool.startswith("affiliate."):
+                action = tool.split(".", 1)[1]
+                if self.affiliate_module is None:
+                    print(f"[ToolExecutor] affiliate_module não configurado — fallback web_search", flush=True)
+                    result = self._execute_web_search("oportunidades afiliados produtos digitais Brasil 2026", count=5)
+                else:
+                    result = execute_affiliate_action(self.affiliate_module, action, args)
+                    # Se falhou por falta de links, usa web_search como fallback
+                    if not result.get("success") and "Nenhum link" in str(result.get("error", "")):
+                        print(f"[ToolExecutor] affiliate sem links cadastrados — fallback web_search", flush=True)
+                        result = self._execute_web_search("produtos afiliados hotmart alta comissão 2026", count=5)
+                result["step_id"] = step_id
+                result["args_input"] = args
+                result["idempotency_key"] = idempotency_key
+                execution_result["tools_executed"].append(result)
+                continue
+
             execution_result["errors"].append(f"{step_id}: tool não suportada ({tool})")
 
         if execution_result["tools_executed"]:
@@ -489,3 +506,4 @@ if __name__ == "__main__":
     print(f"\nInsights gerados: {len(result['insights'])}")
     for insight in result['insights']:
         print(f"  - {insight}")
+        
