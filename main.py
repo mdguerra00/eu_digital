@@ -74,8 +74,10 @@ RECEIPTS_TABLE = os.environ.get("EXECUTION_RECEIPTS_TABLE", "execution_receipts"
 _receipts_table_disabled = False
 RECEIPTS_FALLBACK_ALERT_THRESHOLD = int(os.environ.get("RECEIPTS_FALLBACK_ALERT_THRESHOLD", "1"))
 RECEIPTS_ALERT_WEBHOOK_URL = os.environ.get("RECEIPTS_ALERT_WEBHOOK_URL", "").strip()
+RECEIPTS_RECHECK_INTERVAL_SECONDS = int(os.environ.get("RECEIPTS_RECHECK_INTERVAL_SECONDS", "60"))
 _receipts_fallback_cycles = 0
 _receipts_last_fallback_reason_code = "unknown"
+_receipts_table_disabled_since = None
 CREATOR_MESSAGES_TABLE = os.environ.get("CREATOR_MESSAGES_TABLE", "creator_messages")
 
 # --- Carregamento do Estatuto ---
@@ -785,7 +787,7 @@ def _write_execution_receipt(
     used_fallback: bool,
     idempotency_key: str,
 ) -> None:
-    global _receipts_table_disabled, _receipts_last_fallback_reason_code
+    global _receipts_table_disabled, _receipts_last_fallback_reason_code, _receipts_table_disabled_since
 
     started_at = utc_now_iso()
     finished_at = utc_now_iso()
@@ -824,7 +826,7 @@ def _write_execution_receipt(
         "idempotency_key": idempotency_key,
     }
 
-    if sb is not None and not _receipts_table_disabled:
+    if _should_try_receipts_supabase():
         try:
             sb.table(RECEIPTS_TABLE).insert(receipt).execute()
             return
@@ -835,6 +837,7 @@ def _write_execution_receipt(
             # Nesse caso, fazemos fallback para arquivo local e evitamos falhar o ciclo.
             if reason_code in {"table_missing", "schema_mismatch"}:
                 _receipts_table_disabled = True
+                _receipts_table_disabled_since = utc_now_dt()
                 log(
                     f"Aviso: tabela de receipts '{RECEIPTS_TABLE}' indisponível no Supabase. "
                     "Usando fallback local (execution_receipts.jsonl)."
@@ -864,6 +867,34 @@ def _classify_receipts_supabase_error(error: Exception) -> str:
     return "unknown"
 
 
+
+
+def _should_try_receipts_supabase() -> bool:
+    """Define quando devemos tentar usar a tabela no Supabase novamente."""
+    global _receipts_table_disabled, _receipts_table_disabled_since
+
+    if sb is None:
+        return False
+
+    if not _receipts_table_disabled:
+        return True
+
+    if _receipts_table_disabled_since is None:
+        _receipts_table_disabled_since = utc_now_dt()
+        return False
+
+    elapsed = (utc_now_dt() - _receipts_table_disabled_since).total_seconds()
+    if elapsed >= max(5, RECEIPTS_RECHECK_INTERVAL_SECONDS):
+        _receipts_table_disabled = False
+        _receipts_table_disabled_since = None
+        log(
+            f"[Receipts] Nova tentativa no Supabase apos cooldown de {int(elapsed)}s."
+        )
+        return True
+
+    return False
+
+
 def _send_receipts_fallback_alert(reason: str, fallback_count: int) -> None:
     payload = {
         "text": (
@@ -889,9 +920,9 @@ def _send_receipts_fallback_alert(reason: str, fallback_count: int) -> None:
 
 def replay_local_receipts_to_supabase(max_rows: int = 500) -> int:
     """Reenvia receipts locais para Supabase quando a tabela voltar a ficar disponível."""
-    global _receipts_table_disabled
+    global _receipts_table_disabled, _receipts_table_disabled_since
 
-    if sb is None or _receipts_table_disabled:
+    if not _should_try_receipts_supabase():
         return 0
 
     receipts_file = Path("execution_receipts.jsonl")
@@ -930,6 +961,7 @@ def replay_local_receipts_to_supabase(max_rows: int = 500) -> int:
             # se falhar, interrompe e mantém arquivo para novas tentativas
             if "PGRST205" in repr(e) or RECEIPTS_TABLE in repr(e):
                 _receipts_table_disabled = True
+                _receipts_table_disabled_since = utc_now_dt()
             log("Aviso: falha durante replay de execution_receipts.jsonl:", repr(e))
             break
 
@@ -1004,9 +1036,9 @@ def _compute_daily_receipts_metrics(window_hours: int = 24) -> Dict[str, Any]:
 
 
 def _receipt_already_exists(idempotency_key: str) -> bool:
-    global _receipts_table_disabled, _receipts_last_fallback_reason_code
+    global _receipts_table_disabled, _receipts_last_fallback_reason_code, _receipts_table_disabled_since
 
-    if sb is not None and not _receipts_table_disabled:
+    if _should_try_receipts_supabase():
         try:
             res = (
                 sb.table(RECEIPTS_TABLE)
@@ -1021,6 +1053,7 @@ def _receipt_already_exists(idempotency_key: str) -> bool:
             _receipts_last_fallback_reason_code = reason_code
             if reason_code in {"table_missing", "schema_mismatch"}:
                 _receipts_table_disabled = True
+                _receipts_table_disabled_since = utc_now_dt()
                 log(
                     f"Aviso: tabela de receipts '{RECEIPTS_TABLE}' indisponível no Supabase durante consulta. "
                     "Usando fallback local (execution_receipts.jsonl)."
