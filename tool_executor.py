@@ -6,10 +6,6 @@ Interpreta e executa chamadas de ferramentas baseadas no plano de ação do agen
 import re
 import hashlib
 import json
-import time
-import os
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, Any, Optional, List
 from tools_module import WebSearchTool, WebScraperTool, MarketAnalyzerTool
 from financial_module import FinancialWallet
@@ -30,9 +26,6 @@ class ToolExecutor:
         self.wallet = wallet
         self.affiliate_module = affiliate_module
         self.execution_history = []
-        self.feedback_file = Path("creator_feedback.json")
-        self.min_scrape_chars = int(os.environ.get("MIN_SCRAPE_CHARS", "1200"))
-        self.max_extra_sources = int(os.environ.get("MAX_EXTRA_SOURCES", "3"))
     
     def execute_tools(self, next_actions: str, cycle_number: int) -> Dict[str, Any]:
         """
@@ -175,28 +168,6 @@ class ToolExecutor:
                 execution_result["tools_executed"].append(result)
                 continue
 
-            if tool.startswith("affiliate."):
-                action = tool.split(".", 1)[1]
-                if self.affiliate_module is None:
-                    print(f"[ToolExecutor] affiliate_module não configurado — fallback web_search", flush=True)
-                    result = self._execute_web_search("oportunidades afiliados produtos digitais Brasil 2026", count=5)
-                else:
-                    result = execute_affiliate_action(self.affiliate_module, action, args)
-                    # Se falhou por falta de links, usa web_search como fallback
-                    if not result.get("success") and "Nenhum link" in str(result.get("error", "")):
-                        print(f"[ToolExecutor] affiliate sem links cadastrados — fallback web_search", flush=True)
-                        result = self._execute_web_search("produtos afiliados hotmart alta comissão 2026", count=5)
-                    # list_links pode retornar success=True com count=0; nesse caso,
-                    # manter o ciclo produtivo com busca pública.
-                    elif action == "list_links" and result.get("success") and int(result.get("count", 0)) == 0:
-                        print(f"[ToolExecutor] affiliate.list_links sem links ativos — fallback web_search", flush=True)
-                        result = self._execute_web_search("produtos afiliados hotmart alta comissão 2026", count=5)
-                result["step_id"] = step_id
-                result["args_input"] = args
-                result["idempotency_key"] = idempotency_key
-                execution_result["tools_executed"].append(result)
-                continue
-
             execution_result["errors"].append(f"{step_id}: tool não suportada ({tool})")
 
         if execution_result["tools_executed"]:
@@ -207,11 +178,9 @@ class ToolExecutor:
 
     def _execute_record_feedback(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Registra feedback do Criador.
-
-        Prioridade de captura:
-        1) args.feedback (ou aliases)
-        2) arquivo creator_feedback.json na raiz do projeto
+        Registra feedback do Criador a partir dos args do plano.
+        O canal oficial Criador->Agente é a tabela creator_messages no Supabase,
+        gerenciada pelo main.py. Esta tool apenas lê feedback passado diretamente nos args.
         """
         feedback = (
             args.get("feedback")
@@ -221,56 +190,26 @@ class ToolExecutor:
         )
         feedback = str(feedback).strip()
 
-        source = "plan_args"
-        payload: Dict[str, Any] = {}
-
         if not feedback:
-            if not self.feedback_file.exists():
-                return {
-                    "tool": "monitoring_system.record_feedback",
-                    "success": False,
-                    "status": "waiting_feedback",
-                    "message": (
-                        "Nenhum feedback encontrado. Para responder, informe args.feedback "
-                        "ou crie o arquivo creator_feedback.json com {'feedback': '...'}"
-                    ),
-                }
-
-            try:
-                payload = json.loads(self.feedback_file.read_text(encoding="utf-8"))
-            except Exception as exc:
-                return {
-                    "tool": "monitoring_system.record_feedback",
-                    "success": False,
-                    "status": "invalid_feedback_file",
-                    "message": f"creator_feedback.json inválido: {exc}",
-                }
-
-            feedback = str(
-                payload.get("feedback")
-                or payload.get("message")
-                or payload.get("content")
-                or ""
-            ).strip()
-            source = "creator_feedback.json"
-
-            if not feedback:
-                return {
-                    "tool": "monitoring_system.record_feedback",
-                    "success": False,
-                    "status": "waiting_feedback",
-                    "message": "creator_feedback.json existe, mas sem campo feedback/message/content.",
-                }
+            return {
+                "tool": "monitoring_system.record_feedback",
+                "success": False,
+                "status": "waiting_feedback",
+                "message": (
+                    "Nenhum feedback nos args. Use a tabela creator_messages no Supabase "
+                    "para enviar mensagens ao agente."
+                ),
+            }
 
         return {
             "tool": "monitoring_system.record_feedback",
             "success": True,
             "status": "feedback_recorded",
             "feedback": feedback,
-            "source": source,
+            "source": "plan_args",
             "metadata": {
-                "author": args.get("author") or payload.get("author") or "Criador",
-                "timestamp": args.get("timestamp") or payload.get("timestamp"),
+                "author": args.get("author") or "Criador",
+                "timestamp": args.get("timestamp"),
             },
         }
     
@@ -337,176 +276,125 @@ class ToolExecutor:
     
     def _execute_niche_analysis(self, niche: str) -> Dict[str, Any]:
         """Executa análise de nicho."""
-        def _inner() -> Dict[str, Any]:
-            try:
-                result = self.market_analyzer.analyze_niche(niche)
-                return {
-                    "tool": "market_analyzer",
-                    "niche": niche,
-                    "success": True,
-                    "opportunities": result.get("opportunities", []),
-                    "result_count": result.get("search_results", {}).get("result_count", 0),
-                }
-            except Exception as e:
-                return {
-                    "tool": "market_analyzer",
-                    "niche": niche,
-                    "success": False,
-                    "error": str(e),
-                }
-
-        return self._run_with_timing(_inner)
+        try:
+            result = self.market_analyzer.analyze_niche(niche)
+            return {
+                "tool": "market_analyzer",
+                "niche": niche,
+                "success": True,
+                "opportunities": result.get("opportunities", []),
+                "result_count": result.get("search_results", {}).get("result_count", 0),
+            }
+        except Exception as e:
+            return {
+                "tool": "market_analyzer",
+                "niche": niche,
+                "success": False,
+                "error": str(e),
+            }
     
-    def _utc_now_iso(self) -> str:
-        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-    def _run_with_timing(self, fn):
-        started_at = self._utc_now_iso()
-        t0 = time.perf_counter()
-        result = fn()
-        finished_at = self._utc_now_iso()
-        latency_ms = int((time.perf_counter() - t0) * 1000)
-        if isinstance(result, dict):
-            result.setdefault("started_at", started_at)
-            result.setdefault("finished_at", finished_at)
-            result.setdefault("latency_ms", latency_ms)
-        return result
-
     def _execute_web_search(self, query: str, count: int = 5) -> Dict[str, Any]:
         """Executa busca web e preserva o conteudo completo da Perplexity."""
-        min_chars = self.min_scrape_chars
+        try:
+            result = self.search_tool.search(query, count=count)
+            urls = [r.get("url") for r in result.get("results", []) if r.get("url")]
 
-        def _inner() -> Dict[str, Any]:
-            try:
-                result = self.search_tool.search(query, count=count)
-                urls = [r.get("url") for r in result.get("results", []) if r.get("url")]
+            # raw_answer = resposta completa da Perplexity (o dado valioso)
+            raw_answer = (result.get("raw_answer") or "").strip()
 
-                # raw_answer = resposta completa da Perplexity (o dado valioso)
-                raw_answer = (result.get("raw_answer") or "").strip()
+            # descriptions = snippets de cada resultado
+            descriptions = [
+                r.get("description", "") for r in result.get("results", [])[:5]
+                if r.get("description")
+            ]
 
-                # descriptions = snippets de cada resultado
-                descriptions = [
-                    r.get("description", "") for r in result.get("results", [])[:5]
-                    if r.get("description")
-                ]
+            # Scrape da primeira URL para enriquecer ainda mais
+            enrichment_scrape = None
+            if urls:
+                enrichment_scrape = self._execute_scrape(urls[0])
 
-                # Scrape da primeira URL para enriquecer ainda mais
-                enrichment_scrape = None
-                if urls:
-                    enrichment_scrape = self._execute_scrape(urls[0])
-
-                extra_sources = []
-                scrape_chars = int((enrichment_scrape or {}).get("text_length") or 0)
-                if scrape_chars < min_chars:
-                    for extra_url in urls[1:1 + self.max_extra_sources]:
-                        extra_scrape = self._execute_scrape(extra_url)
-                        extra_sources.append(extra_scrape)
-                        if int(extra_scrape.get("text_length") or 0) >= min_chars:
-                            break
-
-                anti_weak_source_policy = {
-                    "enabled": True,
-                    "min_chars": min_chars,
-                    "primary_source_chars": scrape_chars,
-                    "extra_sources_attempted": len(extra_sources),
-                    "satisfied": scrape_chars >= min_chars or any(
-                        int(item.get("text_length") or 0) >= min_chars for item in extra_sources
-                    ),
-                }
-
-                return {
-                    "tool": "web_search",
-                    "query": query,
-                    "success": result.get("success", False),
-                    "result_count": result.get("result_count", 0),
-                    "raw_answer": raw_answer,
-                    "descriptions": descriptions,
-                    "results_preview": [r.get("title","") for r in result.get("results", [])[:3]],
-                    "top_result_url": urls[0] if urls else None,
-                    "all_urls": urls[:5],
-                    "used_fallback": result.get("used_fallback", False),
-                    "provider": (result.get("provider_meta") or {}).get("provider", "unknown"),
-                    "enrichment_scrape": enrichment_scrape,
-                    "extra_scrapes": extra_sources,
-                    "low_density_detected": scrape_chars < min_chars,
-                    "anti_weak_source_policy": anti_weak_source_policy,
-                }
-            except Exception as e:
-                return {
-                    "tool": "web_search",
-                    "query": query,
-                    "success": False,
-                    "error": str(e),
-                }
-
-        return self._run_with_timing(_inner)
-
+            return {
+                "tool": "web_search",
+                "query": query,
+                "success": result.get("success", False),
+                "result_count": result.get("result_count", 0),
+                "raw_answer": raw_answer,           # resposta completa da Perplexity
+                "descriptions": descriptions,       # snippets dos resultados
+                "results_preview": [r.get("title","") for r in result.get("results", [])[:3]],
+                "top_result_url": urls[0] if urls else None,
+                "all_urls": urls[:5],
+                "used_fallback": result.get("used_fallback", False),
+                "provider": (result.get("provider_meta") or {}).get("provider", "unknown"),
+                "enrichment_scrape": enrichment_scrape,
+            }
+        except Exception as e:
+            return {
+                "tool": "web_search",
+                "query": query,
+                "success": False,
+                "error": str(e),
+            }
+    
     def _execute_scrape(self, url: str) -> Dict[str, Any]:
         """Executa raspagem de página via Steel Browser ou requests+BS4."""
-        def _inner() -> Dict[str, Any]:
-            try:
-                result = self.scraper_tool.scrape_page(url, extract_text=True)
-                success = result.get("success", False)
-                text = (result.get("text") or "").strip()
-                provider = result.get("provider", "unknown")
+        try:
+            result = self.scraper_tool.scrape_page(url, extract_text=True)
+            success = result.get("success", False)
+            text = (result.get("text") or "").strip()
+            provider = result.get("provider", "unknown")
 
-                # Log explícito para diagnóstico nos logs do Railway
-                if success:
-                    print(f"[Scraper] OK provider={provider} | chars={len(text)} | url={url[:80]!r}", flush=True)
-                else:
-                    err = result.get("error", "sem detalhe")
-                    steel_err = result.get("steel_error", "")
-                    print(f"[Scraper] ERRO provider={provider} | error={err!r} | steel_error={steel_err!r} | url={url[:80]!r}", flush=True)
+            # Log explícito para diagnóstico nos logs do Railway
+            if success:
+                print(f"[Scraper] OK provider={provider} | chars={len(text)} | url={url[:80]!r}", flush=True)
+            else:
+                err = result.get("error", "sem detalhe")
+                steel_err = result.get("steel_error", "")
+                print(f"[Scraper] ERRO provider={provider} | error={err!r} | steel_error={steel_err!r} | url={url[:80]!r}", flush=True)
 
-                return {
-                    "tool": "web_scraper",
-                    "url": url,
-                    "success": success,
-                    "title": result.get("title", "N/A"),
-                    "text": text[:2000],
-                    "text_length": len(text),
-                    "provider": provider,
-                    "error": result.get("error"),
-                    "steel_error": result.get("steel_error"),
-                }
-            except Exception as e:
-                print(f"[Scraper] EXCECAO | error={repr(e)} | url={url[:80]!r}", flush=True)
-                return {
-                    "tool": "web_scraper",
-                    "url": url,
-                    "success": False,
-                    "error": repr(e),
-                }
-
-        return self._run_with_timing(_inner)
-
+            return {
+                "tool": "web_scraper",
+                "url": url,
+                "success": success,
+                "title": result.get("title", "N/A"),
+                "text": text[:2000],          # conteudo real da pagina
+                "text_length": len(text),
+                "provider": provider,
+                "error": result.get("error"),
+                "steel_error": result.get("steel_error"),
+            }
+        except Exception as e:
+            print(f"[Scraper] EXCECAO | error={repr(e)} | url={url[:80]!r}", flush=True)
+            return {
+                "tool": "web_scraper",
+                "url": url,
+                "success": False,
+                "error": repr(e),
+            }
+    
     def _execute_record_revenue(self, revenue_info: Dict[str, Any]) -> Dict[str, Any]:
         """Executa registro de receita."""
-        def _inner() -> Dict[str, Any]:
-            try:
-                transaction = self.wallet.record_revenue(
-                    amount=revenue_info["amount"],
-                    source=revenue_info["source"],
-                    description=revenue_info.get("description", ""),
-                )
-                return {
-                    "tool": "financial_wallet",
-                    "action": "record_revenue",
-                    "success": True,
-                    "amount": revenue_info["amount"],
-                    "source": revenue_info["source"],
-                    "agent_balance_after": transaction["agent_balance_after"],
-                    "creator_balance_after": transaction["creator_balance_after"],
-                }
-            except Exception as e:
-                return {
-                    "tool": "financial_wallet",
-                    "action": "record_revenue",
-                    "success": False,
-                    "error": str(e),
-                }
-
-        return self._run_with_timing(_inner)
+        try:
+            transaction = self.wallet.record_revenue(
+                amount=revenue_info["amount"],
+                source=revenue_info["source"],
+                description=revenue_info.get("description", ""),
+            )
+            return {
+                "tool": "financial_wallet",
+                "action": "record_revenue",
+                "success": True,
+                "amount": revenue_info["amount"],
+                "source": revenue_info["source"],
+                "agent_balance_after": transaction["agent_balance_after"],
+                "creator_balance_after": transaction["creator_balance_after"],
+            }
+        except Exception as e:
+            return {
+                "tool": "financial_wallet",
+                "action": "record_revenue",
+                "success": False,
+                "error": str(e),
+            }
     
     def _generate_insights(self, tool_results: list) -> list:
         """Gera insights baseado nos resultados das ferramentas."""
@@ -567,4 +455,3 @@ if __name__ == "__main__":
     print(f"\nInsights gerados: {len(result['insights'])}")
     for insight in result['insights']:
         print(f"  - {insight}")
-        
