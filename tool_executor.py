@@ -7,6 +7,7 @@ import re
 import hashlib
 import json
 import time
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -30,6 +31,8 @@ class ToolExecutor:
         self.affiliate_module = affiliate_module
         self.execution_history = []
         self.feedback_file = Path("creator_feedback.json")
+        self.min_scrape_chars = int(os.environ.get("MIN_SCRAPE_CHARS", "1200"))
+        self.max_extra_sources = int(os.environ.get("MAX_EXTRA_SOURCES", "3"))
     
     def execute_tools(self, next_actions: str, cycle_number: int) -> Dict[str, Any]:
         """
@@ -371,7 +374,7 @@ class ToolExecutor:
 
     def _execute_web_search(self, query: str, count: int = 5) -> Dict[str, Any]:
         """Executa busca web e preserva o conteudo completo da Perplexity."""
-        min_chars = 1200
+        min_chars = self.min_scrape_chars
 
         def _inner() -> Dict[str, Any]:
             try:
@@ -395,11 +398,21 @@ class ToolExecutor:
                 extra_sources = []
                 scrape_chars = int((enrichment_scrape or {}).get("text_length") or 0)
                 if scrape_chars < min_chars:
-                    for extra_url in urls[1:4]:
+                    for extra_url in urls[1:1 + self.max_extra_sources]:
                         extra_scrape = self._execute_scrape(extra_url)
                         extra_sources.append(extra_scrape)
                         if int(extra_scrape.get("text_length") or 0) >= min_chars:
                             break
+
+                anti_weak_source_policy = {
+                    "enabled": True,
+                    "min_chars": min_chars,
+                    "primary_source_chars": scrape_chars,
+                    "extra_sources_attempted": len(extra_sources),
+                    "satisfied": scrape_chars >= min_chars or any(
+                        int(item.get("text_length") or 0) >= min_chars for item in extra_sources
+                    ),
+                }
 
                 return {
                     "tool": "web_search",
@@ -416,6 +429,7 @@ class ToolExecutor:
                     "enrichment_scrape": enrichment_scrape,
                     "extra_scrapes": extra_sources,
                     "low_density_detected": scrape_chars < min_chars,
+                    "anti_weak_source_policy": anti_weak_source_policy,
                 }
             except Exception as e:
                 return {
