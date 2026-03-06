@@ -1299,7 +1299,7 @@ def _start_dashboard() -> None:
         if str(_root) not in sys.path:
             sys.path.insert(0, str(_root))
         from interface.app import app as _dashboard_app
-        _port = int(os.environ.get("DASHBOARD_PORT", "5000"))
+        _port = int(os.environ.get("PORT", os.environ.get("DASHBOARD_PORT", "5000")))
         import threading as _threading
         _t = _threading.Thread(
             target=lambda: _dashboard_app.run(

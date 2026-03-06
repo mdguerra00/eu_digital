@@ -461,7 +461,7 @@ def sse():
 # Entry point
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    port = int(os.environ.get("DASHBOARD_PORT", "5000"))
+    port = int(os.environ.get("PORT", os.environ.get("DASHBOARD_PORT", "5000")))
     debug = os.environ.get("DASHBOARD_DEBUG", "").lower() in ("1", "true")
     print(f"[DASHBOARD] Iniciando em http://0.0.0.0:{port}")
     app.run(host="0.0.0.0", port=port, debug=debug, threaded=True)
