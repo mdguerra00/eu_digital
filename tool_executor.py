@@ -6,6 +6,8 @@ Interpreta e executa chamadas de ferramentas baseadas no plano de ação do agen
 import re
 import hashlib
 import json
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from tools_module import WebSearchTool, WebScraperTool, MarketAnalyzerTool
@@ -332,125 +334,165 @@ class ToolExecutor:
     
     def _execute_niche_analysis(self, niche: str) -> Dict[str, Any]:
         """Executa análise de nicho."""
-        try:
-            result = self.market_analyzer.analyze_niche(niche)
-            return {
-                "tool": "market_analyzer",
-                "niche": niche,
-                "success": True,
-                "opportunities": result.get("opportunities", []),
-                "result_count": result.get("search_results", {}).get("result_count", 0),
-            }
-        except Exception as e:
-            return {
-                "tool": "market_analyzer",
-                "niche": niche,
-                "success": False,
-                "error": str(e),
-            }
+        def _inner() -> Dict[str, Any]:
+            try:
+                result = self.market_analyzer.analyze_niche(niche)
+                return {
+                    "tool": "market_analyzer",
+                    "niche": niche,
+                    "success": True,
+                    "opportunities": result.get("opportunities", []),
+                    "result_count": result.get("search_results", {}).get("result_count", 0),
+                }
+            except Exception as e:
+                return {
+                    "tool": "market_analyzer",
+                    "niche": niche,
+                    "success": False,
+                    "error": str(e),
+                }
+
+        return self._run_with_timing(_inner)
     
+    def _utc_now_iso(self) -> str:
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def _run_with_timing(self, fn):
+        started_at = self._utc_now_iso()
+        t0 = time.perf_counter()
+        result = fn()
+        finished_at = self._utc_now_iso()
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        if isinstance(result, dict):
+            result.setdefault("started_at", started_at)
+            result.setdefault("finished_at", finished_at)
+            result.setdefault("latency_ms", latency_ms)
+        return result
+
     def _execute_web_search(self, query: str, count: int = 5) -> Dict[str, Any]:
         """Executa busca web e preserva o conteudo completo da Perplexity."""
-        try:
-            result = self.search_tool.search(query, count=count)
-            urls = [r.get("url") for r in result.get("results", []) if r.get("url")]
+        min_chars = 1200
 
-            # raw_answer = resposta completa da Perplexity (o dado valioso)
-            raw_answer = (result.get("raw_answer") or "").strip()
+        def _inner() -> Dict[str, Any]:
+            try:
+                result = self.search_tool.search(query, count=count)
+                urls = [r.get("url") for r in result.get("results", []) if r.get("url")]
 
-            # descriptions = snippets de cada resultado
-            descriptions = [
-                r.get("description", "") for r in result.get("results", [])[:5]
-                if r.get("description")
-            ]
+                # raw_answer = resposta completa da Perplexity (o dado valioso)
+                raw_answer = (result.get("raw_answer") or "").strip()
 
-            # Scrape da primeira URL para enriquecer ainda mais
-            enrichment_scrape = None
-            if urls:
-                enrichment_scrape = self._execute_scrape(urls[0])
+                # descriptions = snippets de cada resultado
+                descriptions = [
+                    r.get("description", "") for r in result.get("results", [])[:5]
+                    if r.get("description")
+                ]
 
-            return {
-                "tool": "web_search",
-                "query": query,
-                "success": result.get("success", False),
-                "result_count": result.get("result_count", 0),
-                "raw_answer": raw_answer,           # resposta completa da Perplexity
-                "descriptions": descriptions,       # snippets dos resultados
-                "results_preview": [r.get("title","") for r in result.get("results", [])[:3]],
-                "top_result_url": urls[0] if urls else None,
-                "all_urls": urls[:5],
-                "used_fallback": result.get("used_fallback", False),
-                "provider": (result.get("provider_meta") or {}).get("provider", "unknown"),
-                "enrichment_scrape": enrichment_scrape,
-            }
-        except Exception as e:
-            return {
-                "tool": "web_search",
-                "query": query,
-                "success": False,
-                "error": str(e),
-            }
-    
+                # Scrape da primeira URL para enriquecer ainda mais
+                enrichment_scrape = None
+                if urls:
+                    enrichment_scrape = self._execute_scrape(urls[0])
+
+                extra_sources = []
+                scrape_chars = int((enrichment_scrape or {}).get("text_length") or 0)
+                if scrape_chars < min_chars:
+                    for extra_url in urls[1:4]:
+                        extra_scrape = self._execute_scrape(extra_url)
+                        extra_sources.append(extra_scrape)
+                        if int(extra_scrape.get("text_length") or 0) >= min_chars:
+                            break
+
+                return {
+                    "tool": "web_search",
+                    "query": query,
+                    "success": result.get("success", False),
+                    "result_count": result.get("result_count", 0),
+                    "raw_answer": raw_answer,
+                    "descriptions": descriptions,
+                    "results_preview": [r.get("title","") for r in result.get("results", [])[:3]],
+                    "top_result_url": urls[0] if urls else None,
+                    "all_urls": urls[:5],
+                    "used_fallback": result.get("used_fallback", False),
+                    "provider": (result.get("provider_meta") or {}).get("provider", "unknown"),
+                    "enrichment_scrape": enrichment_scrape,
+                    "extra_scrapes": extra_sources,
+                    "low_density_detected": scrape_chars < min_chars,
+                }
+            except Exception as e:
+                return {
+                    "tool": "web_search",
+                    "query": query,
+                    "success": False,
+                    "error": str(e),
+                }
+
+        return self._run_with_timing(_inner)
+
     def _execute_scrape(self, url: str) -> Dict[str, Any]:
         """Executa raspagem de página via Steel Browser ou requests+BS4."""
-        try:
-            result = self.scraper_tool.scrape_page(url, extract_text=True)
-            success = result.get("success", False)
-            text = (result.get("text") or "").strip()
-            provider = result.get("provider", "unknown")
+        def _inner() -> Dict[str, Any]:
+            try:
+                result = self.scraper_tool.scrape_page(url, extract_text=True)
+                success = result.get("success", False)
+                text = (result.get("text") or "").strip()
+                provider = result.get("provider", "unknown")
 
-            # Log explícito para diagnóstico nos logs do Railway
-            if success:
-                print(f"[Scraper] OK provider={provider} | chars={len(text)} | url={url[:80]!r}", flush=True)
-            else:
-                err = result.get("error", "sem detalhe")
-                steel_err = result.get("steel_error", "")
-                print(f"[Scraper] ERRO provider={provider} | error={err!r} | steel_error={steel_err!r} | url={url[:80]!r}", flush=True)
+                # Log explícito para diagnóstico nos logs do Railway
+                if success:
+                    print(f"[Scraper] OK provider={provider} | chars={len(text)} | url={url[:80]!r}", flush=True)
+                else:
+                    err = result.get("error", "sem detalhe")
+                    steel_err = result.get("steel_error", "")
+                    print(f"[Scraper] ERRO provider={provider} | error={err!r} | steel_error={steel_err!r} | url={url[:80]!r}", flush=True)
 
-            return {
-                "tool": "web_scraper",
-                "url": url,
-                "success": success,
-                "title": result.get("title", "N/A"),
-                "text": text[:2000],          # conteudo real da pagina
-                "text_length": len(text),
-                "provider": provider,
-                "error": result.get("error"),
-                "steel_error": result.get("steel_error"),
-            }
-        except Exception as e:
-            print(f"[Scraper] EXCECAO | error={repr(e)} | url={url[:80]!r}", flush=True)
-            return {
-                "tool": "web_scraper",
-                "url": url,
-                "success": False,
-                "error": repr(e),
-            }
-    
+                return {
+                    "tool": "web_scraper",
+                    "url": url,
+                    "success": success,
+                    "title": result.get("title", "N/A"),
+                    "text": text[:2000],
+                    "text_length": len(text),
+                    "provider": provider,
+                    "error": result.get("error"),
+                    "steel_error": result.get("steel_error"),
+                }
+            except Exception as e:
+                print(f"[Scraper] EXCECAO | error={repr(e)} | url={url[:80]!r}", flush=True)
+                return {
+                    "tool": "web_scraper",
+                    "url": url,
+                    "success": False,
+                    "error": repr(e),
+                }
+
+        return self._run_with_timing(_inner)
+
     def _execute_record_revenue(self, revenue_info: Dict[str, Any]) -> Dict[str, Any]:
         """Executa registro de receita."""
-        try:
-            transaction = self.wallet.record_revenue(
-                amount=revenue_info["amount"],
-                source=revenue_info["source"],
-                description=revenue_info.get("description", ""),
-            )
-            return {
-                "tool": "financial_wallet",
-                "action": "record_revenue",
-                "success": True,
-                "amount": revenue_info["amount"],
-                "source": revenue_info["source"],
-                "agent_balance_after": transaction["agent_balance_after"],
-                "creator_balance_after": transaction["creator_balance_after"],
-            }
-        except Exception as e:
-            return {
-                "tool": "financial_wallet",
-                "action": "record_revenue",
-                "success": False,
-                "error": str(e),
-            }
+        def _inner() -> Dict[str, Any]:
+            try:
+                transaction = self.wallet.record_revenue(
+                    amount=revenue_info["amount"],
+                    source=revenue_info["source"],
+                    description=revenue_info.get("description", ""),
+                )
+                return {
+                    "tool": "financial_wallet",
+                    "action": "record_revenue",
+                    "success": True,
+                    "amount": revenue_info["amount"],
+                    "source": revenue_info["source"],
+                    "agent_balance_after": transaction["agent_balance_after"],
+                    "creator_balance_after": transaction["creator_balance_after"],
+                }
+            except Exception as e:
+                return {
+                    "tool": "financial_wallet",
+                    "action": "record_revenue",
+                    "success": False,
+                    "error": str(e),
+                }
+
+        return self._run_with_timing(_inner)
     
     def _generate_insights(self, tool_results: list) -> list:
         """Gera insights baseado nos resultados das ferramentas."""

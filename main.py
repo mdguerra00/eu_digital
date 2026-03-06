@@ -72,6 +72,9 @@ CYCLE_NUMBER_COL = os.environ.get("CYCLE_NUMBER_COL", "cycle_number")
 FOCUS_COL = os.environ.get("FOCUS_COL", "focus")
 RECEIPTS_TABLE = os.environ.get("EXECUTION_RECEIPTS_TABLE", "execution_receipts")
 _receipts_table_disabled = False
+RECEIPTS_FALLBACK_ALERT_THRESHOLD = int(os.environ.get("RECEIPTS_FALLBACK_ALERT_THRESHOLD", "3"))
+RECEIPTS_ALERT_WEBHOOK_URL = os.environ.get("RECEIPTS_ALERT_WEBHOOK_URL", "").strip()
+_receipts_fallback_cycles = 0
 CREATOR_MESSAGES_TABLE = os.environ.get("CREATOR_MESSAGES_TABLE", "creator_messages")
 
 # --- Carregamento do Estatuto ---
@@ -789,6 +792,17 @@ def _write_execution_receipt(
     raw_output = json.dumps(tool_output, ensure_ascii=False)
     evidence_hash = hashlib.sha256(raw_output.encode("utf-8")).hexdigest()
 
+    started_dt = parse_datetime(tool_output.get("started_at")) or utc_now_dt()
+    finished_dt = parse_datetime(tool_output.get("finished_at")) or utc_now_dt()
+    latency_ms = max(0, int((finished_dt - started_dt).total_seconds() * 1000))
+    chars_captured = int(
+        tool_output.get("text_length")
+        or len((tool_output.get("text") or "").strip())
+        or len((tool_output.get("raw_answer") or "").strip())
+    )
+    final_url = tool_output.get("url") or tool_output.get("top_result_url")
+    fallback_reason = str(tool_output.get("error") or tool_output.get("steel_error") or "").strip() or None
+
     receipt = {
         "run_id": run_id,
         "cycle_number": cycle_number,
@@ -801,6 +815,10 @@ def _write_execution_receipt(
         "raw_output": tool_output,
         "evidence_hash": evidence_hash,
         "used_fallback": used_fallback,
+        "fallback_reason": fallback_reason,
+        "latency_ms": latency_ms,
+        "chars_captured": chars_captured,
+        "final_url": final_url,
         "idempotency_key": idempotency_key,
     }
 
@@ -823,6 +841,80 @@ def _write_execution_receipt(
     receipts_file = Path("execution_receipts.jsonl")
     with open(receipts_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(receipt, ensure_ascii=False) + "\n")
+
+
+def _send_receipts_fallback_alert(reason: str, fallback_count: int) -> None:
+    payload = {
+        "text": (
+            f"[ALERTA][{AGENT_NAME}] execution_receipts em fallback local por {fallback_count} ciclo(s). "
+            f"Motivo: {reason}."
+        ),
+        "agent_name": AGENT_NAME,
+        "fallback_cycles": fallback_count,
+        "reason": reason,
+    }
+    log(payload["text"])
+
+    if not RECEIPTS_ALERT_WEBHOOK_URL:
+        return
+
+    try:
+        import requests
+        requests.post(RECEIPTS_ALERT_WEBHOOK_URL, json=payload, timeout=8)
+    except Exception as e:
+        log(f"Aviso: falha ao enviar alerta de receipts para webhook: {repr(e)}")
+
+
+def replay_local_receipts_to_supabase(max_rows: int = 500) -> int:
+    """Reenvia receipts locais para Supabase quando a tabela voltar a ficar disponível."""
+    global _receipts_table_disabled
+
+    if sb is None or _receipts_table_disabled:
+        return 0
+
+    receipts_file = Path("execution_receipts.jsonl")
+    if not receipts_file.exists():
+        return 0
+
+    try:
+        with open(receipts_file, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+    except Exception as e:
+        log("Aviso: falha ao abrir execution_receipts.jsonl para replay:", repr(e))
+        return 0
+
+    if not lines:
+        return 0
+
+    replayed = 0
+    for line in lines[:max_rows]:
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+
+        idempotency_key = row.get("idempotency_key")
+        if not idempotency_key:
+            continue
+
+        if _receipt_already_exists(idempotency_key):
+            replayed += 1
+            continue
+
+        try:
+            sb.table(RECEIPTS_TABLE).insert(row).execute()
+            replayed += 1
+        except Exception as e:
+            # se falhar, interrompe e mantém arquivo para novas tentativas
+            if "PGRST205" in repr(e) or RECEIPTS_TABLE in repr(e):
+                _receipts_table_disabled = True
+            log("Aviso: falha durante replay de execution_receipts.jsonl:", repr(e))
+            break
+
+    if replayed > 0:
+        log(f"[ReceiptsReplay] replay concluído: {replayed} receipt(s) reenviados.")
+
+    return replayed
 
 
 def _receipt_already_exists(idempotency_key: str) -> bool:
@@ -1044,10 +1136,14 @@ Entregue JSON puro no formato:
 # Core cycle
 # -----------------------------
 def run_once(run_id: str) -> Dict[str, Any]:
+    global _receipts_fallback_cycles
     cycle_started_at = utc_now_dt()
 
     # Lê prompt base do agent_state
     task_prompt = get_current_task_prompt()
+
+    # Tenta replay de receipts locais quando Supabase estiver disponível
+    replay_local_receipts_to_supabase(max_rows=200)
 
     # Lê mensagens pendentes do Criador e enriquece o prompt
     creator_msgs = fetch_pending_creator_messages()
@@ -1124,6 +1220,10 @@ def run_once(run_id: str) -> Dict[str, Any]:
                     part += "URLs: " + " | ".join(urls[:3]) + "\n"
                 if enrich_text:
                     part += f"Conteudo scraping ({enrich.get('url','')}):\n{enrich_text[:600]}\n"
+                for extra_scrape in tool_result.get("extra_scrapes", [])[:2]:
+                    extra_text = (extra_scrape.get("text") or "").strip()
+                    if extra_text:
+                        part += f"Fonte textual extra ({extra_scrape.get('url','')}):\n{extra_text[:400]}\n"
                 summary_parts.append(part.strip())
 
             elif tool_name == "market_analyzer" and success:
@@ -1181,6 +1281,16 @@ def run_once(run_id: str) -> Dict[str, Any]:
                     used_fallback=bool(tool_result.get("used_fallback", False)),
                     idempotency_key=idempotency_key,
                 )
+
+            if _receipts_table_disabled:
+                _receipts_fallback_cycles += 1
+                if _receipts_fallback_cycles >= RECEIPTS_FALLBACK_ALERT_THRESHOLD:
+                    _send_receipts_fallback_alert(
+                        reason=f"Tabela {RECEIPTS_TABLE} indisponível.",
+                        fallback_count=_receipts_fallback_cycles,
+                    )
+            else:
+                _receipts_fallback_cycles = 0
 
             if AGENT_MODE == "real" and bool(tool_result.get("used_fallback", False)):
                 raise RuntimeError(f"Fallback detectado em modo real para tool={tool_name}")
