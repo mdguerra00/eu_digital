@@ -1289,5 +1289,31 @@ def main_loop() -> None:
             sleep_in_chunks(ERROR_RETRY_SECONDS)
 
 
+def _start_dashboard() -> None:
+    """Inicia o dashboard web em background thread, se disponível."""
+    try:
+        import sys
+        from pathlib import Path as _Path
+        # Adiciona o diretório raiz ao path para importar interface.app
+        _root = _Path(__file__).resolve().parent
+        if str(_root) not in sys.path:
+            sys.path.insert(0, str(_root))
+        from interface.app import app as _dashboard_app
+        _port = int(os.environ.get("DASHBOARD_PORT", "5000"))
+        import threading as _threading
+        _t = _threading.Thread(
+            target=lambda: _dashboard_app.run(
+                host="0.0.0.0", port=_port, debug=False, threaded=True, use_reloader=False
+            ),
+            daemon=True,
+            name="dashboard",
+        )
+        _t.start()
+        log(f"[Dashboard] Interface disponível na porta {_port}")
+    except Exception as _e:
+        log(f"[Dashboard] Aviso: não foi possível iniciar o dashboard: {_e}")
+
+
 if __name__ == "__main__":
+    _start_dashboard()
     main_loop()
