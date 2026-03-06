@@ -523,19 +523,28 @@ class SteelBrowserTool:
             content_obj_keys = list(data.get("content", {}).keys()) if isinstance(data.get("content"), dict) else "N/A"
             print(f"[SteelBrowser] resposta keys={top_keys} | content_keys={content_obj_keys}", flush=True)
 
-            # Tentar todos os campos possíveis
+            # Steel self-hosted retorna {content: {html}, metadata, links}
             content_obj = data.get("content") or {}
-            text = (
-                content_obj.get("text")
+            raw_html = (
+                content_obj.get("html")           # confirmado nos logs: content_keys=['html']
+                or content_obj.get("text")
                 or content_obj.get("cleaned_html")
-                or content_obj.get("html")
-                or data.get("text")
-                or data.get("content") if isinstance(data.get("content"), str) else ""
-                or data.get("markdown")
                 or data.get("html")
-                or data.get("body")
+                or data.get("text")
                 or ""
             )
+            # Extrair texto limpo do HTML via BeautifulSoup
+            if raw_html and "<" in raw_html:
+                try:
+                    from bs4 import BeautifulSoup as _BS
+                    _soup = _BS(raw_html, "html.parser")
+                    for _tag in _soup(["script", "style", "nav", "footer"]):
+                        _tag.decompose()
+                    text = _soup.get_text(separator="\n", strip=True)
+                except Exception:
+                    text = raw_html
+            else:
+                text = raw_html
             title = (
                 data.get("title")
                 or (data.get("page") or {}).get("title")
