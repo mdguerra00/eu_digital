@@ -484,7 +484,7 @@ class SteelBrowserTool:
         self.endpoint = (
             endpoint
             or os.getenv("STEEL_BROWSER_ENDPOINT")
-            or "https://steel-browser.railway.internal/v1/scrape"
+            or "http://steel-browser.railway.internal:3000/v1/scrape"
         )
         self.timeout_s = timeout_s
 
