@@ -1148,6 +1148,16 @@ def run_once(run_id: str) -> Dict[str, Any]:
                 text = (tool_result.get("text") or tool_result.get("title") or "").strip()
                 summary_parts.append(f"[web_scraper: {url!r}]\n{text[:800]}")
 
+            elif tool_name.startswith("affiliate."):
+                summary = (tool_result.get("summary") or tool_result.get("promo_text") or "").strip()
+                error = (tool_result.get("error") or "").strip()
+                if summary:
+                    summary_parts.append(f"[{tool_name}]\n{summary[:800]}")
+                elif error:
+                    summary_parts.append(f"[{tool_name}: sem links] {error[:200]}")
+                else:
+                    summary_parts.append(f"[{tool_name}: retornou vazio]")
+
             elif not success:
                 summary_parts.append(f"[{tool_name}: ERRO] {tool_result.get('error','desconhecido')}")
 
