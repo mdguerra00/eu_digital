@@ -112,7 +112,7 @@ search_tool = WebSearchTool(api_key=os.environ.get("PERPLEXITY_API_KEY"))
 #   3) URL publica como ultimo fallback
 _steel_endpoint = os.environ.get(
     "STEEL_BROWSER_ENDPOINT",
-    "https://steel-browser.railway.internal/v1/scrape"  # SSL, path correto
+    "http://steel-browser.railway.internal:3000/v1/scrape"  # porta 3000, HTTP interno
 )
 steel_browser = SteelBrowserTool(
     api_key=os.environ.get("STEEL_BROWSER_API_KEY"),  # opcional, pode ser None
