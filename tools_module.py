@@ -507,11 +507,10 @@ class SteelBrowserTool:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        # Payload no formato correto da Steel Browser API v1
+        # Payload correto para Steel Browser self-hosted
         payload: Dict[str, Any] = {
             "url": url,
-            "format": ["cleaned_html", "text"],  # formatos suportados pela Steel API
-            "delay": 1000,                        # aguarda JS carregar (ms)
+            "delay": 1000,  # aguarda JS carregar (ms)
         }
 
         try:
