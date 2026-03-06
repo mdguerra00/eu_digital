@@ -45,11 +45,55 @@ class AffiliateModule:
             res = query.order("commission_pct", desc=True).limit(limit).execute()
             links = res.data or []
             print(f"[AffiliateModule] {len(links)} link(s) ativo(s) encontrado(s).", flush=True)
+
+            if not links:
+                self._log_empty_links_diagnostic(niche=niche)
+
             return links
 
         except Exception as e:
             print(f"[AffiliateModule] Erro ao buscar links: {repr(e)}", flush=True)
             return []
+
+    def _log_empty_links_diagnostic(self, niche: Optional[str] = None) -> None:
+        """
+        Diagnóstico para explicar por que a consulta retornou vazia.
+        """
+        if self.sb is None:
+            return
+
+        try:
+            sample = (
+                self.sb.table(self.TABLE)
+                .select("id, agent_name, active, niche")
+                .limit(5)
+                .execute()
+            )
+            rows = sample.data or []
+
+            if not rows:
+                print(
+                    "[AffiliateModule][Diagnóstico] tabela affiliate_links está vazia. "
+                    "Este módulo apenas lê dados e não insere links automaticamente.",
+                    flush=True,
+                )
+                return
+
+            active_rows = [r for r in rows if r.get("active") is True]
+            same_agent = [r for r in rows if r.get("agent_name") == self.agent_name]
+            same_niche = [r for r in rows if niche and r.get("niche") == niche]
+
+            print(
+                "[AffiliateModule][Diagnóstico] Existem registros em affiliate_links, "
+                f"mas nenhum combina com os filtros atuais (agent_name={self.agent_name!r}, "
+                f"active=True{', niche=' + repr(niche) if niche else ''}). "
+                f"Amostra: total={len(rows)}, active=True={len(active_rows)}, "
+                f"agent_name igual={len(same_agent)}"
+                + (f", niche igual={len(same_niche)}" if niche else ""),
+                flush=True,
+            )
+        except Exception as e:
+            print(f"[AffiliateModule][Diagnóstico] falha ao inspecionar affiliate_links: {repr(e)}", flush=True)
 
     def get_best_link(self, niche: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Retorna o melhor link (maior comissão) para um nicho."""
