@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Calcula KPIs de receipts por janela de ciclos e gera relatório markdown com semáforo."""
 """Calcula KPIs de receipts (24h/7d) e gera relatório markdown com semáforo."""
 
 from __future__ import annotations
@@ -81,6 +82,21 @@ class WindowResult:
     window_color: str
 
 
+def _last_n_by_cycle(rows: List[Dict[str, Any]], n: int, cycle_key: str = "cycle_number") -> List[Dict[str, Any]]:
+    valid_rows = [r for r in rows if isinstance(r.get(cycle_key), int)]
+    sorted_rows = sorted(valid_rows, key=lambda r: r[cycle_key], reverse=True)
+    return sorted_rows[:n]
+
+
+def compute_window(
+    label: str,
+    window_cycles: int,
+    cycle_rows: List[Dict[str, Any]],
+    receipt_rows: List[Dict[str, Any]],
+) -> WindowResult:
+    cycle_w = _last_n_by_cycle(cycle_rows, window_cycles)
+    cycles = len(cycle_w)
+    selected_cycles = {r.get("cycle_number") for r in cycle_w}
 def compute_window(
     label: str,
     now: datetime,
@@ -101,6 +117,10 @@ def compute_window(
         pct_fallback = None
         pct_in_db = None
 
+    rec_w = [
+        r for r in receipt_rows
+        if isinstance(r.get("cycle_number"), int) and r.get("cycle_number") in selected_cycles
+    ]
     rec_w = [r for r in receipt_rows if (parse_iso(r.get("finished_at") or r.get("started_at")) or datetime.min.replace(tzinfo=timezone.utc)) >= start]
 
     latencies = [float(r.get("latency_ms")) for r in rec_w if isinstance(r.get("latency_ms"), (int, float))]
@@ -108,6 +128,7 @@ def compute_window(
 
     if rec_w:
         required_fields = ["tool", "status", "latency_ms", "final_url", "chars_captured"]
+        complete = sum(1 for r in rec_w if all(r.get(k) not in (None, "") for k in required_fields))
         complete = 0
         for r in rec_w:
             if all(r.get(k) not in (None, "") for k in required_fields):
@@ -191,6 +212,7 @@ def render_report(results: List[WindowResult], final_conclusion: str, cycle_file
         "",
         "## Semáforo por janela",
         "",
+        "| Janela | Semáforo | % ciclos com receipts no banco | % fallback local | p95 latência persistência (ms) | cobertura telemetria | ciclos analisados |",
         "| Janela | Semáforo | % ciclos com receipts no banco | % fallback local | p95 latência persistência (ms) | cobertura telemetria | ciclos |",
         "|---|---|---:|---:|---:|---:|---:|",
     ]
@@ -210,6 +232,9 @@ def render_report(results: List[WindowResult], final_conclusion: str, cycle_file
         "",
         "## Regras da conclusão automática",
         "",
+        "- **eficaz**: todas as janelas em verde.",
+        "- **parcialmente eficaz**: mistura de verde/amarelo/vermelho.",
+        "- **não eficaz**: todas as janelas em vermelho ou sem dados suficientes.",
         "- **eficaz**: janelas 24h e 7d em verde.",
         "- **parcialmente eficaz**: mistura de verde/amarelo/vermelho, sem falha total nas duas janelas.",
         "- **não eficaz**: ambas as janelas em vermelho ou sem dados suficientes para comprovar melhora.",
@@ -220,6 +245,13 @@ def render_report(results: List[WindowResult], final_conclusion: str, cycle_file
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Avalia KPIs de execution_receipts por número de ciclos")
+    parser.add_argument("--cycle-metrics", default="receipts_cycle_metrics.jsonl", help="JSONL com métricas por ciclo")
+    parser.add_argument("--receipts", default="execution_receipts.jsonl", help="JSONL com receipts")
+    parser.add_argument("--window-cycles", type=int, default=5, help="Quantidade de ciclos na janela de análise")
+    parser.add_argument("--output", default="RELATORIO_AVALIACAO_RECEIPTS.md", help="Arquivo markdown de saída")
+    args = parser.parse_args()
+
     parser = argparse.ArgumentParser(description="Avalia KPIs de execution_receipts e gera relatório markdown")
     parser.add_argument("--cycle-metrics", default="receipts_cycle_metrics.jsonl", help="JSONL com métricas por ciclo")
     parser.add_argument("--receipts", default="execution_receipts.jsonl", help="JSONL com receipts")
@@ -234,6 +266,7 @@ def main() -> int:
     receipt_rows = read_jsonl(receipt_file)
 
     windows = [
+        compute_window(f"últimos {args.window_cycles} ciclos", args.window_cycles, cycle_rows, receipt_rows),
         compute_window("24h", now, 24, cycle_rows, receipt_rows),
         compute_window("7d", now, 24 * 7, cycle_rows, receipt_rows),
     ]
