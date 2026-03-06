@@ -484,7 +484,7 @@ class SteelBrowserTool:
         self.endpoint = (
             endpoint
             or os.getenv("STEEL_BROWSER_ENDPOINT")
-            or "https://steel-browser-production-008f.up.railway.app/scrape"
+            or "http://steel-browser.railway.internal:3000/v1/scrape"
         )
         self.timeout_s = timeout_s
 
@@ -507,12 +507,11 @@ class SteelBrowserTool:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
+        # Payload no formato correto da Steel Browser API v1
         payload: Dict[str, Any] = {
             "url": url,
-            "options": {
-                "extract_text": extract_text,
-                "extract_links": extract_links,
-            },
+            "format": ["cleaned_html", "text"],  # formatos suportados pela Steel API
+            "delay": 1000,                        # aguarda JS carregar (ms)
         }
 
         try:
@@ -520,7 +519,15 @@ class SteelBrowserTool:
             response.raise_for_status()
             data = response.json()
 
-            text = data.get("text") or data.get("content") or data.get("markdown") or ""
+            # Steel API retorna: {content: {text, cleaned_html}, url, status, title}
+            content_obj = data.get("content") or {}
+            text = (
+                content_obj.get("text")
+                or content_obj.get("cleaned_html")
+                or data.get("text")
+                or data.get("markdown")
+                or ""
+            )
             title = data.get("title") or data.get("page", {}).get("title") or "N/A"
             links = data.get("links") or []
 
