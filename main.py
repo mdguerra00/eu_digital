@@ -1019,12 +1019,18 @@ Entregue JSON puro no formato:
     execution_plan = _normalize_execution_plan(data.get("execution_plan"))
     is_plan_valid, plan_msg = _validate_execution_plan(execution_plan)
 
-    if AGENT_MODE == "real" and not is_plan_valid:
-        raise RuntimeError(f"AGENT_MODE=real exige execution_plan válido. Erro: {plan_msg}")
-
-    if AGENT_MODE != "real" and not is_plan_valid:
-        log(f"Aviso: execution_plan inválido/ausente em simulation: {plan_msg}")
-        execution_plan = []
+    if not is_plan_valid:
+        # Em vez de lançar exceção, gerar plano de fallback automaticamente
+        log(f"[LLM] execution_plan inválido/ausente ({plan_msg}). Gerando fallback.")
+        fallback_query = next_actions[:120] if next_actions and "fallback" not in next_actions.lower() else "oportunidades afiliados produtos digitais Brasil 2026"
+        execution_plan = [{
+            "id": "step_fallback",
+            "tool": "web_search",
+            "args": {"query": fallback_query, "count": 5},
+            "success_criteria": "obter dados relevantes",
+            "on_failure": "skip",
+        }]
+        log(f"[LLM] Fallback plan: web_search query={fallback_query[:60]!r}")
 
     return {
         "result_text": result_text,
