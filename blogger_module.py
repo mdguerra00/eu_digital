@@ -2,103 +2,138 @@
 blogger_module.py
 Módulo para publicar artigos no Blogger via API do Google.
 O agente EU_DE_NEGOCIOS usa este módulo para publicar conteúdo real.
+
+CORREÇÃO: Token renovado é salvo no Supabase (agent_state) para persistir
+entre restarts do Railway. Sem isso, o token expirava a cada ciclo.
 """
 
 import os
 import json
 import logging
-from datetime import datetime
 from typing import Optional
 
 import requests
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
 logger = logging.getLogger(__name__)
 
-# Escopos necessários para ler e escrever no Blogger
 SCOPES = ["https://www.googleapis.com/auth/blogger"]
-
-# ID do blog (preenchido após autenticação inicial)
 BLOG_ID = os.environ.get("BLOGGER_BLOG_ID", "")
 
-# Caminho para o token salvo (Railway persiste variáveis de ambiente)
-TOKEN_PATH = "blogger_token.json"
-CREDENTIALS_PATH = "blogger_credentials.json"
+
+def _supabase_headers() -> dict:
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY", "")
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _load_token_from_supabase() -> Optional[str]:
+    """Lê o token salvo na tabela agent_state do Supabase."""
+    url = os.environ.get("SUPABASE_URL", "")
+    if not url:
+        return None
+    try:
+        resp = requests.get(
+            f"{url}/rest/v1/agent_state",
+            headers=_supabase_headers(),
+            params={"select": "current_task_prompt", "agent_name": "eq.BLOGGER_TOKEN"},
+            timeout=10,
+        )
+        data = resp.json()
+        if data and isinstance(data, list) and len(data) > 0:
+            return data[0].get("current_task_prompt")
+    except Exception as e:
+        logger.warning(f"[BloggerToken] Erro ao ler token do Supabase: {e}")
+    return None
+
+
+def _save_token_to_supabase(token_json: str):
+    """Salva o token renovado no Supabase para persistir entre restarts."""
+    url = os.environ.get("SUPABASE_URL", "")
+    if not url:
+        return
+    try:
+        resp = requests.post(
+            f"{url}/rest/v1/agent_state",
+            headers={**_supabase_headers(), "Prefer": "resolution=merge-duplicates"},
+            json={
+                "agent_name": "BLOGGER_TOKEN",
+                "current_task_prompt": token_json,
+            },
+            timeout=10,
+        )
+        if resp.status_code in (200, 201):
+            logger.info("[BloggerToken] Token salvo no Supabase com sucesso.")
+        else:
+            logger.warning(f"[BloggerToken] Supabase retornou {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[BloggerToken] Erro ao salvar token no Supabase: {e}")
 
 
 def _get_credentials() -> Optional[Credentials]:
-    """Obtém credenciais OAuth válidas, renovando se necessário."""
+    """
+    Obtém credenciais OAuth válidas, renovando se necessário.
+    Ordem de prioridade:
+      1. Supabase (token mais recente, persiste entre restarts)
+      2. Variável de ambiente BLOGGER_TOKEN_JSON (fallback)
+    Após renovar, salva no Supabase para o próximo ciclo.
+    """
     creds = None
 
-    # Tenta carregar token salvo
-    token_json = os.environ.get("BLOGGER_TOKEN_JSON")
-    if token_json:
+    # 1. Tenta carregar do Supabase (mais atualizado)
+    token_from_supabase = _load_token_from_supabase()
+    if token_from_supabase:
         try:
             creds = Credentials.from_authorized_user_info(
-                json.loads(token_json), SCOPES
+                json.loads(token_from_supabase), SCOPES
             )
+            logger.info("[BloggerToken] Token carregado do Supabase.")
         except Exception as e:
-            logger.warning(f"Token salvo inválido: {e}")
-
-    # Fallback: arquivo local
-    if not creds and os.path.exists(TOKEN_PATH):
-        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
-
-    # Renova token expirado automaticamente
-    if creds and creds.expired and creds.refresh_token:
-        try:
-            creds.refresh(Request())
-            _save_token(creds)
-            logger.info("Token renovado com sucesso.")
-        except Exception as e:
-            logger.error(f"Falha ao renovar token: {e}")
+            logger.warning(f"[BloggerToken] Token do Supabase inválido: {e}")
             creds = None
 
+    # 2. Fallback: variável de ambiente
+    if not creds:
+        token_json = os.environ.get("BLOGGER_TOKEN_JSON")
+        if token_json:
+            try:
+                creds = Credentials.from_authorized_user_info(
+                    json.loads(token_json), SCOPES
+                )
+                logger.info("[BloggerToken] Token carregado da variável de ambiente.")
+            except Exception as e:
+                logger.warning(f"[BloggerToken] Token da env inválido: {e}")
+
+    if not creds:
+        logger.error("[BloggerToken] Nenhuma credencial encontrada.")
+        return None
+
+    # Renova se expirado
+    if creds.expired and creds.refresh_token:
+        try:
+            logger.info("[BloggerToken] Token expirado, renovando...")
+            creds.refresh(Request())
+            _save_token_to_supabase(creds.to_json())
+            logger.info("[BloggerToken] Token renovado e salvo no Supabase.")
+        except Exception as e:
+            logger.error(f"[BloggerToken] Falha ao renovar token: {e}")
+            return None
+
     return creds
-
-
-def _save_token(creds: Credentials):
-    """Salva token em arquivo local para reutilização."""
-    with open(TOKEN_PATH, "w") as f:
-        f.write(creds.to_json())
-    logger.info(f"Token salvo em {TOKEN_PATH}")
-
-
-def authenticate() -> bool:
-    """
-    Realiza autenticação OAuth interativa (rode localmente uma vez).
-    Gera o blogger_token.json que deve ser adicionado ao Railway.
-    """
-    if not os.path.exists(CREDENTIALS_PATH):
-        logger.error(
-            f"Arquivo {CREDENTIALS_PATH} não encontrado. "
-            "Baixe o JSON do Google Cloud Console e salve como blogger_credentials.json"
-        )
-        return False
-
-    flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-    creds = flow.run_local_server(port=0)
-    _save_token(creds)
-
-    print("\n✅ Autenticação concluída!")
-    print(f"Token salvo em: {TOKEN_PATH}")
-    print("\nAdicione o conteúdo do token como variável de ambiente no Railway:")
-    print("  Nome: BLOGGER_TOKEN_JSON")
-    print(f"  Valor: {creds.to_json()}")
-    return True
 
 
 def get_blog_id() -> Optional[str]:
     """Descobre o ID do blog automaticamente pelo URL."""
     creds = _get_credentials()
     if not creds:
-        logger.error("Sem credenciais válidas.")
         return None
 
     url = "https://www.googleapis.com/blogger/v3/blogs/byurl"
-    params = {"url": "https://viverbemsaudavel.blogspot.com"}
+    params = {"url": "https://equilibriobemviver.blogspot.com"}
     headers = {"Authorization": f"Bearer {creds.token}"}
 
     try:
@@ -106,8 +141,7 @@ def get_blog_id() -> Optional[str]:
         resp.raise_for_status()
         data = resp.json()
         blog_id = data.get("id")
-        print(f"✅ Blog ID encontrado: {blog_id}")
-        print("Adicione no Railway como variável: BLOGGER_BLOG_ID=" + blog_id)
+        logger.info(f"Blog ID encontrado: {blog_id}")
         return blog_id
     except Exception as e:
         logger.error(f"Erro ao buscar blog ID: {e}")
@@ -117,7 +151,7 @@ def get_blog_id() -> Optional[str]:
 def publish_post(
     title: str,
     content: str,
-    labels: list[str] = None,
+    labels: list = None,
     affiliate_link: str = None,
     affiliate_product: str = None,
 ) -> dict:
@@ -127,7 +161,7 @@ def publish_post(
     Args:
         title: Título do artigo
         content: Conteúdo HTML do artigo
-        labels: Lista de categorias/tags (ex: ["emagrecimento", "saúde"])
+        labels: Lista de categorias/tags
         affiliate_link: Link de afiliado para incluir no artigo
         affiliate_product: Nome do produto afiliado
 
@@ -136,7 +170,7 @@ def publish_post(
     """
     creds = _get_credentials()
     if not creds:
-        return {"success": False, "error": "Sem credenciais válidas. Execute authenticate() primeiro."}
+        return {"success": False, "error": "Sem credenciais válidas. Execute autenticar_blogger.py primeiro."}
 
     blog_id = BLOG_ID or get_blog_id()
     if not blog_id:
@@ -149,7 +183,7 @@ def publish_post(
 <div style="background:#f0f7f0;border-left:4px solid #2e7d32;padding:16px;margin:24px 0;border-radius:4px;">
   <p><strong>🌿 Produto recomendado:</strong> {affiliate_product}</p>
   <p>
-    <a href="{affiliate_link}" 
+    <a href="{affiliate_link}"
        style="background:#2e7d32;color:white;padding:10px 20px;text-decoration:none;border-radius:4px;display:inline-block;">
       👉 Saiba mais e garanta o seu
     </a>
@@ -229,15 +263,3 @@ def list_recent_posts(max_results: int = 5) -> list:
     except Exception as e:
         logger.error(f"Erro ao listar posts: {e}")
         return []
-
-
-if __name__ == "__main__":
-    # Rode este arquivo diretamente para autenticar:
-    # python blogger_module.py
-    print("=== Autenticação do Blogger ===")
-    print("Este script abre o navegador para você autorizar o acesso ao Blogger.")
-    print()
-    if authenticate():
-        print()
-        print("=== Buscando ID do blog ===")
-        get_blog_id()
