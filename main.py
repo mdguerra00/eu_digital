@@ -930,7 +930,10 @@ Em caso de conflito, priorize sempre os Princípios Inquebráveis (Seção 2).
         "\n  4. Parágrafos de 3-5 linhas, linguagem simples e direta"
         "\n  5. Conclusão motivadora (1-2 parágrafos)"
         "\n- Inclua pelo menos uma imagem relevante usando tag HTML:"
-        "\n  <img src='https://source.unsplash.com/800x400/?health,weight-loss' alt='saúde e emagrecimento' style='width:100%;max-width:600px;border-radius:8px;margin:16px 0;'>"
+        "\n  Escolha UMA destas URLs de imagem (variar a cada artigo usando o número do ciclo como seed):"
+        "\n  <img src='https://picsum.photos/seed/CICLO/800/400' alt='saúde e emagrecimento' style='width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;'>"
+        "\n  Substitua CICLO pelo número do ciclo atual (ex: ciclo 500 → https://picsum.photos/seed/500/800/400)"
+        "\n  Isso garante uma imagem diferente e real a cada artigo."
         "\n- Tom: amigável, empático, motivador. Fale diretamente com o leitor usando 'você'."
         "\n- Sempre baseie o conteúdo nos resultados reais da web_search."
         + statute_section
@@ -956,6 +959,9 @@ TOOLS DISPONÍVEIS (use APENAS estas, exatamente com estes nomes):
 - affiliate.get_best              → args: {{"niche": "saude_emagrecimento"}} (opcional)
 - affiliate.generate_promo        → args: {{"niche": "saude_emagrecimento", "format": "instagram|twitter|whatsapp|email"}}
 - blogger.publish_post            → args: {{"title": "Título chamativo com número ou promessa", "content": "HTML completo do artigo (mínimo 800 palavras)", "labels": ["saúde", "emagrecimento"], "affiliate_link": "https://...", "affiliate_product": "Nome do produto"}}
+
+IMAGEM OBRIGATÓRIA NO ARTIGO: inclua esta tag img no início do artigo (após a introdução), usando o número do ciclo como seed:
+<img src="https://picsum.photos/seed/{cycle_number}/800/400" alt="saúde e emagrecimento" style="width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;">
 
 FLUXO OBRIGATÓRIO A CADA CICLO:
 1. web_search → pesquise um tema DIFERENTE dos ciclos anteriores, sempre sobre saúde/emagrecimento
