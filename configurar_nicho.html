@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Configurador de Nicho — EU Digital</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0a0f; --surface: #13131a; --surface2: #1c1c26;
+  --border: #2a2a38; --accent: #7c6dfa; --green: #4ade80;
+  --pink: #fa6d9a; --text: #e8e8f0; --muted: #6b6b85;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 40px 20px; }
+.container { max-width: 720px; margin: 0 auto; }
+header { margin-bottom: 40px; }
+header h1 { font-family: 'Syne', sans-serif; font-size: 26px; font-weight: 800; }
+header p { color: var(--muted); font-size: 14px; margin-top: 6px; }
+.step { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; margin-bottom: 16px; }
+.step-num { font-family: 'Syne', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 2px; color: var(--accent); text-transform: uppercase; margin-bottom: 8px; }
+.step h2 { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+.step p { font-size: 13px; color: var(--muted); margin-bottom: 16px; line-height: 1.6; }
+.upload-area { border: 2px dashed var(--border); border-radius: 12px; padding: 32px; text-align: center; cursor: pointer; transition: all 0.2s; position: relative; }
+.upload-area:hover { border-color: var(--accent); background: rgba(124,109,250,0.05); }
+.upload-area input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+.upload-area .icon { font-size: 32px; margin-bottom: 8px; }
+.upload-area .lbl { font-size: 14px; color: var(--muted); }
+.upload-area.loaded { border-color: var(--green); border-style: solid; background: rgba(74,222,128,0.05); }
+.upload-area.loaded .lbl { color: var(--green); font-weight: 500; }
+.presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.preset { padding: 8px 16px; border-radius: 100px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); font-size: 13px; cursor: pointer; transition: all 0.15s; font-family: 'DM Sans', sans-serif; }
+.preset:hover, .preset.on { border-color: var(--accent); background: rgba(124,109,250,0.12); color: var(--text); }
+label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
+input[type=text] { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 14px; outline: none; transition: border-color 0.2s; }
+input[type=text]:focus { border-color: var(--accent); }
+.field { margin-bottom: 16px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; min-height: 20px; }
+.tag { padding: 5px 12px; background: var(--surface2); border: 1px solid var(--border); border-radius: 100px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.tag span { cursor: pointer; font-size: 16px; line-height: 1; }
+.tag span:hover { color: var(--pink); }
+.tag-row { display: flex; gap: 8px; }
+.tag-row input { flex: 1; }
+.add-btn { padding: 10px 16px; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; color: var(--muted); font-size: 18px; cursor: pointer; transition: all 0.15s; }
+.add-btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn-main { width: 100%; padding: 18px; background: linear-gradient(135deg, var(--accent), #9b6dfa); border: none; border-radius: 14px; color: white; font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; cursor: pointer; transition: opacity 0.2s, transform 0.1s; }
+.btn-main:hover { opacity: 0.9; transform: translateY(-1px); }
+.result { display: none; margin-top: 20px; background: rgba(74,222,128,0.07); border: 1px solid rgba(74,222,128,0.25); border-radius: 14px; padding: 24px; }
+.result.show { display: block; }
+.result h3 { font-family: 'Syne', sans-serif; color: var(--green); font-size: 18px; margin-bottom: 6px; }
+.result > p { font-size: 13px; color: var(--muted); margin-bottom: 20px; }
+.dl-btn { display: inline-flex; align-items: center; gap: 10px; padding: 16px 32px; background: var(--green); border-radius: 12px; color: #000; font-weight: 700; font-size: 16px; text-decoration: none; transition: opacity 0.2s; margin-bottom: 24px; }
+.dl-btn:hover { opacity: 0.85; }
+.checklist { display: flex; flex-direction: column; gap: 12px; }
+.check-item { display: flex; gap: 16px; background: var(--surface2); border-radius: 12px; padding: 16px; }
+.check-num { width: 28px; height: 28px; min-width: 28px; background: var(--accent); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px; color: white; }
+.check-body { flex: 1; }
+.check-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+.check-desc { font-size: 12px; color: var(--muted); margin-bottom: 10px; line-height: 1.5; }
+.check-desc b { color: var(--accent); }
+.code-block { display: block; background: var(--bg); border-radius: 8px; padding: 10px 14px; font-family: 'Courier New', monospace; font-size: 12px; color: #a8b4d8; }
+.copy-row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.copy-val { flex: 1; background: var(--bg); border-radius: 8px; padding: 10px 14px; font-family: 'Courier New', monospace; font-size: 13px; color: var(--pink); }
+.copy-btn { padding: 8px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; cursor: pointer; white-space: nowrap; transition: all 0.15s; }
+.copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+.railway-link { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; background: rgba(124,109,250,0.12); border: 1px solid rgba(124,109,250,0.3); border-radius: 8px; color: var(--accent); font-size: 13px; font-weight: 500; text-decoration: none; transition: all 0.15s; }
+.railway-link:hover { background: rgba(124,109,250,0.2); }
+.erro { color: var(--pink); font-size: 13px; margin-top: 10px; display: none; }
+.erro.show { display: block; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <h1>⚙️ Configurador de Nicho</h1>
+    <p>Carregue o main.py, escolha o nicho e baixe o main.py já atualizado.</p>
+  </header>
+
+  <!-- PASSO 1 -->
+  <div class="step">
+    <div class="step-num">Passo 1</div>
+    <h2>Carregar o main.py atual</h2>
+    <p>Selecione o main.py do repositório eu_digital no seu computador.</p>
+    <div class="upload-area" id="ua">
+      <input type="file" id="fi" accept=".py">
+      <div class="icon">📄</div>
+      <div class="lbl" id="ul">Clique aqui ou arraste o main.py</div>
+    </div>
+  </div>
+
+  <!-- PASSO 2 -->
+  <div class="step">
+    <div class="step-num">Passo 2</div>
+    <h2>Escolher o nicho do blog</h2>
+    <p>Selecione um preset ou edite os campos manualmente.</p>
+
+    <div class="presets">
+      <button class="preset on" onclick="loadP('saude',this)">🥗 Saúde & Emagrecimento</button>
+      <button class="preset" onclick="loadP('financas',this)">💰 Finanças Pessoais</button>
+      <button class="preset" onclick="loadP('fitness',this)">💪 Fitness</button>
+      <button class="preset" onclick="loadP('relacionamentos',this)">❤️ Relacionamentos</button>
+      <button class="preset" onclick="loadP('tecnologia',this)">💻 Tecnologia & IA</button>
+    </div>
+
+    <div class="field">
+      <label>FOCO DO AGENTE — valor da variável FOCUS no Railway</label>
+      <input type="text" id="f-focus" placeholder="ex: Saúde e emagrecimento - blog de afiliados">
+    </div>
+    <div class="field">
+      <label>ESPECIALIDADE DO AGENTE — usado no system prompt</label>
+      <input type="text" id="f-esp" placeholder="ex: saúde e emagrecimento">
+    </div>
+    <div class="field">
+      <label>TEMAS DOS ARTIGOS — o agente vai variar entre estes assuntos</label>
+      <div class="tags" id="tags"></div>
+      <div class="tag-row">
+        <input type="text" id="nt" placeholder="Novo tema... (Enter para adicionar)" onkeydown="if(event.key==='Enter')addTag()">
+        <button class="add-btn" onclick="addTag()">+</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>TEMAS PROIBIDOS — o agente nunca vai publicar sobre isso</label>
+      <input type="text" id="f-blocked" placeholder="ex: marketing digital, programação, política">
+    </div>
+  </div>
+
+  <!-- PASSO 3 -->
+  <div class="step">
+    <div class="step-num">Passo 3</div>
+    <h2>Gerar e baixar</h2>
+    <p>O main.py será atualizado nos 3 pontos e estará pronto para o GitHub.</p>
+    <button class="btn-main" onclick="gerar()">⚡ Gerar e Baixar main.py Atualizado</button>
+    <div class="erro" id="erro"></div>
+
+    <div class="result" id="result">
+      <h3>✅ main.py pronto!</h3>
+      <p>Siga os 3 passos abaixo para aplicar tudo.</p>
+
+      <a class="dl-btn" id="dl" href="#" download="main.py">⬇️ Baixar main.py</a>
+
+      <div class="checklist">
+        <div class="check-item">
+          <div class="check-num">1</div>
+          <div class="check-body">
+            <div class="check-title">Subir o main.py no GitHub</div>
+            <div class="check-desc">Substitua o arquivo no repositório e faça o push</div>
+            <code class="code-block">git add main.py &amp;&amp; git commit -m "Configurar nicho" &amp;&amp; git push</code>
+          </div>
+        </div>
+
+        <div class="check-item">
+          <div class="check-num">2</div>
+          <div class="check-body">
+            <div class="check-title">Atualizar a variável FOCUS no Railway</div>
+            <div class="check-desc">Copie o valor abaixo e cole na variável <b>FOCUS</b> do seu serviço no Railway</div>
+            <div class="copy-row">
+              <div class="copy-val" id="focus-display"></div>
+              <button class="copy-btn" onclick="copiarFocus()">📋 Copiar</button>
+            </div>
+            <a class="railway-link" href="https://railway.app/dashboard" target="_blank">🚂 Abrir Railway Dashboard →</a>
+          </div>
+        </div>
+
+        <div class="check-item">
+          <div class="check-num">3</div>
+          <div class="check-body">
+            <div class="check-title">Aguardar o redeploy</div>
+            <div class="check-desc">O Railway detecta o push e reinicia automaticamente com o novo nicho ✅</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script>
+const P = {
+  saude: {
+    focus: "Saúde e emagrecimento - blog de afiliados",
+    esp: "saúde e emagrecimento",
+    topics: ["jejum intermitente","dieta low carb","exercícios em casa","alimentos termogênicos","sono e emagrecimento","hidratação e metabolismo","ansiedade e comida","suplementos naturais","dieta mediterrânea","yoga para emagrecer","receitas fit","controle do apetite"],
+    blocked: "marketing digital, CRM, email marketing, programação, tecnologia, política"
+  },
+  financas: {
+    focus: "Finanças pessoais e investimentos - blog de afiliados",
+    esp: "finanças pessoais e investimentos",
+    topics: ["como sair das dívidas","tesouro direto para iniciantes","investir com pouco dinheiro","reserva de emergência","cartão de crédito sem juros","renda passiva","fundos imobiliários","criptomoedas para iniciantes","cortar gastos mensais","planejamento financeiro familiar","como economizar no supermercado","aposentadoria antecipada"],
+    blocked: "saúde, medicina, dietas, exercícios físicos, entretenimento, esportes"
+  },
+  fitness: {
+    focus: "Fitness e musculação - blog de afiliados",
+    esp: "fitness e musculação",
+    topics: ["treino de hipertrofia","benefícios da creatina","treino em casa sem equipamento","dieta para ganhar massa muscular","cardio para queimar gordura","suplementação pré-treino","recuperação muscular","treino funcional","treino para mulheres","como montar treino semanal","proteína no pós-treino","HIIT para iniciantes"],
+    blocked: "finanças, investimentos, marketing digital, tecnologia, política"
+  },
+  relacionamentos: {
+    focus: "Relacionamentos e desenvolvimento pessoal - blog de afiliados",
+    esp: "relacionamentos e desenvolvimento pessoal",
+    topics: ["como melhorar o casamento","comunicação não violenta","autoconhecimento","como superar um término","atrair relacionamento saudável","amor próprio","inteligência emocional","vínculos afetivos","sinais de relacionamento tóxico","confiança no relacionamento","ciúmes e insegurança","resgatar o amor no casamento"],
+    blocked: "finanças, tecnologia, política, medicina clínica, programação"
+  },
+  tecnologia: {
+    focus: "Tecnologia e inteligência artificial - blog de afiliados",
+    esp: "tecnologia e inteligência artificial",
+    topics: ["como usar ChatGPT no trabalho","ferramentas de IA gratuitas","automatizar tarefas com IA","prompt engineering","IA para criadores de conteúdo","ferramentas de produtividade","ganhar dinheiro com IA","inteligência artificial para iniciantes","IA na educação","tendências tecnológicas 2026","criar conteúdo com IA","IA para pequenas empresas"],
+    blocked: "saúde, medicina, dietas, finanças pessoais básicas, esportes, política"
+  }
+};
+
+let topics = [];
+let fileContent = null;
+
+// Upload
+document.getElementById('fi').addEventListener('change', function() {
+  const f = this.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = e => {
+    fileContent = e.target.result;
+    document.getElementById('ua').classList.add('loaded');
+    document.getElementById('ul').textContent = '✅ ' + f.name + ' carregado (' + (fileContent.length/1024).toFixed(0) + ' KB)';
+    document.getElementById('result').classList.remove('show');
+    document.getElementById('erro').classList.remove('show');
+  };
+  r.readAsText(f, 'utf-8');
+});
+
+// Presets
+function loadP(key, btn) {
+  document.querySelectorAll('.preset').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  const d = P[key];
+  document.getElementById('f-focus').value = d.focus;
+  document.getElementById('f-esp').value = d.esp;
+  document.getElementById('f-blocked').value = d.blocked;
+  topics = [...d.topics];
+  renderTags();
+}
+
+// Tags
+function renderTags() {
+  document.getElementById('tags').innerHTML = topics.map((t,i) =>
+    `<span class="tag">${t} <span onclick="removeTag(${i})">×</span></span>`
+  ).join('');
+}
+function addTag() {
+  const v = document.getElementById('nt').value.trim();
+  if (v && !topics.includes(v)) { topics.push(v); renderTags(); }
+  document.getElementById('nt').value = '';
+}
+function removeTag(i) { topics.splice(i,1); renderTags(); }
+
+// Gerar
+function gerar() {
+  const erro = document.getElementById('erro');
+  erro.classList.remove('show');
+  document.getElementById('result').classList.remove('show');
+
+  if (!fileContent) {
+    erro.textContent = '⚠️ Carregue o main.py no Passo 1 primeiro.';
+    erro.classList.add('show'); return;
+  }
+  const focus = document.getElementById('f-focus').value.trim();
+  const esp = document.getElementById('f-esp').value.trim();
+  const blocked = document.getElementById('f-blocked').value.trim();
+  if (!focus || !esp || topics.length === 0) {
+    erro.textContent = '⚠️ Preencha o Foco, a Especialidade e adicione ao menos um tema.';
+    erro.classList.add('show'); return;
+  }
+
+  let c = fileContent;
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // 1) FOCUS padrão
+  c = c.replace(
+    /FOCUS = os\.environ\.get\("FOCUS",\s*"[^"]*"\)/,
+    `FOCUS = os.environ.get("FOCUS", "${focus}")`
+  );
+
+  // 2) Linha de especialidade no system prompt (1ª linha)
+  c = c.replace(
+    /"Você é um agente autônomo de negócios especializado em [^"]+\. "/,
+    `"Você é um agente autônomo de negócios especializado em ${esp}. "`
+  );
+
+  // 3) Linha do objetivo no system prompt (2ª linha)
+  c = c.replace(
+    /"Seu objetivo é gerar receita real através de um blog de afiliados no nicho de [^"]+\. "/,
+    `"Seu objetivo é gerar receita real através de um blog de afiliados no nicho de ${esp}. "`
+  );
+
+  // 4) FOCO ABSOLUTO no system prompt
+  c = c.replace(
+    /"\\n- FOCO ABSOLUTO em [^"]+\. Nunca publique sobre outros temas\."/,
+    `"\\n- FOCO ABSOLUTO em ${esp}. Nunca publique sobre outros temas."`
+  );
+
+  // 5) Temas variados no user prompt
+  c = c.replace(
+    /Exemplos de temas variados: [^\n]+/,
+    `Exemplos de temas variados: ${topics.join(', ')}.`
+  );
+
+  // 6) Temas proibidos no user prompt
+  c = c.replace(
+    /O blog é sobre [^—\n]+— NUNCA publique sobre [^\n]+/,
+    `O blog é sobre ${esp} — NUNCA publique sobre ${blocked} ou outros temas fora do nicho.`
+  );
+
+  // Checar se ao menos 4 das 6 substituições funcionaram
+  const ok = [
+    c.includes(`"${focus}"`),
+    c.includes(`especializado em ${esp}`),
+    c.includes(`FOCO ABSOLUTO em ${esp}`),
+    c.includes(topics[0])
+  ].filter(Boolean).length;
+
+  if (ok < 3) {
+    erro.textContent = '⚠️ Não foi possível localizar os trechos no main.py. Certifique-se de estar usando a versão correta do arquivo.';
+    erro.classList.add('show'); return;
+  }
+
+  const blob = new Blob([c], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const dl = document.getElementById('dl');
+  dl.href = url;
+  dl.download = 'main.py';
+
+  document.getElementById('focus-display').textContent = focus;
+  document.getElementById('result').classList.add('show');
+  document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
+}
+
+function copiarFocus() {
+  const val = document.getElementById('focus-display').textContent;
+  navigator.clipboard.writeText(val).then(() => {
+    const btn = document.querySelector('.copy-btn');
+    btn.textContent = '✅ Copiado!';
+    setTimeout(() => btn.textContent = '📋 Copiar', 2000);
+  });
+}
+
+// Init
+loadP('saude', document.querySelector('.preset.on'));
+</script>
+</body>
+</html>
