@@ -290,10 +290,10 @@ function gerar() {
     `"Seu objetivo é gerar receita real através de um blog de afiliados no nicho de ${esp}. "`
   );
 
-  // 4) FOCO ABSOLUTO no system prompt
+  // 4) FOCO ABSOLUTO no system prompt (regex flexível)
   c = c.replace(
-    /"\\n- FOCO ABSOLUTO em [^"]+\. Nunca publique sobre outros temas\."/,
-    `"\\n- FOCO ABSOLUTO em ${esp}. Nunca publique sobre outros temas."`
+    /\"\\n- FOCO ABSOLUTO em [^\"]+\./,
+    `\"\\n- FOCO ABSOLUTO em ${esp}. Nunca publique sobre ${blocked} ou outros temas fora do nicho.`
   );
 
   // 5) Temas variados no user prompt
