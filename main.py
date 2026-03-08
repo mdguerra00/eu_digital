@@ -17,6 +17,8 @@ from financial_module import FinancialWallet
 from tools_module import WebSearchTool, WebScraperTool, MarketAnalyzerTool, SteelBrowserTool
 from tool_executor import ToolExecutor
 from affiliate_module import AffiliateModule
+from blogger_module import publish_post, list_recent_posts
+from blogger_tool_patch import _patch_tool_executor
 
 
 # -----------------------------
@@ -123,6 +125,7 @@ print(f"[SteelBrowser] configured={steel_browser.is_configured()} | endpoint={st
 affiliate_mod.sb = sb  # injeta cliente Supabase após inicialização
 market_analyzer = MarketAnalyzerTool(search_tool, scraper_tool)
 tool_executor = ToolExecutor(search_tool, scraper_tool, market_analyzer, wallet, affiliate_module=affiliate_mod)
+tool_executor = _patch_tool_executor(tool_executor)
 
 
 # -----------------------------
@@ -935,8 +938,13 @@ TOOLS DISPONÍVEIS (use APENAS estas, exatamente com estes nomes):
 - affiliate.list_links            → args: {{"niche": "saude_emagrecimento"}} (opcional)
 - affiliate.get_best              → args: {{"niche": "saude_emagrecimento"}} (opcional)
 - affiliate.generate_promo        → args: {{"niche": "saude_emagrecimento", "format": "instagram|twitter|whatsapp|email"}}
+- blogger.publish_post            → args: {{"title": "Título do artigo", "content": "Conteúdo HTML completo do artigo (mínimo 500 palavras)", "labels": ["saúde", "emagrecimento"], "affiliate_link": "https://...", "affiliate_product": "Nome do produto"}}
 
-PRIORIDADE DE USO: Se há links de afiliado cadastrados, USE affiliate.list_links primeiro para ver o que está disponível. Depois use affiliate.generate_promo para gerar conteúdo de divulgação real.
+PRIORIDADE DE USO:
+1. Use affiliate.list_links para ver produtos disponíveis
+2. Use web_search para pesquisar o tema do artigo
+3. Use blogger.publish_post para publicar um artigo COMPLETO no blog (mínimo 500 palavras, com introdução, desenvolvimento e conclusão)
+Todo ciclo deve terminar com pelo menos um artigo publicado no Blogger quando houver links de afiliado disponíveis.
 
 ATENÇÃO: NÃO invente tools. NÃO use "monitor_feedback". NÃO aguarde aprovação.
 Se a memória mostra ciclos de espera, IGNORE-OS e execute a próxima ação útil agora.
@@ -1148,6 +1156,16 @@ def run_once(run_id: str) -> Dict[str, Any]:
                 url = tool_result.get("url", "")
                 text = (tool_result.get("text") or tool_result.get("title") or "").strip()
                 summary_parts.append(f"[web_scraper: {url!r}]\n{text[:800]}")
+
+            elif tool_name == "blogger.publish_post":
+                if success:
+                    post_url = tool_result.get("url", "")
+                    post_title = tool_result.get("title", "")
+                    summary_parts.append(f"[blogger.publish_post: PUBLICADO]\nTítulo: {post_title}\nURL: {post_url}")
+                    log(f"  📝 Artigo publicado no Blogger: {post_url}")
+                else:
+                    error = tool_result.get("error", "desconhecido")
+                    summary_parts.append(f"[blogger.publish_post: ERRO] {error}")
 
             elif not success:
                 summary_parts.append(f"[{tool_name}: ERRO] {tool_result.get('error','desconhecido')}")
