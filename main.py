@@ -930,10 +930,12 @@ Em caso de conflito, priorize sempre os Princípios Inquebráveis (Seção 2).
         "\n  4. Parágrafos de 3-5 linhas, linguagem simples e direta"
         "\n  5. Conclusão motivadora (1-2 parágrafos)"
         "\n- Inclua pelo menos uma imagem relevante usando tag HTML:"
-        "\n  Escolha UMA destas URLs de imagem (variar a cada artigo usando o número do ciclo como seed):"
-        "\n  <img src='https://picsum.photos/seed/CICLO/800/400' alt='saúde e emagrecimento' style='width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;'>"
-        "\n  Substitua CICLO pelo número do ciclo atual (ex: ciclo 500 → https://picsum.photos/seed/500/800/400)"
-        "\n  Isso garante uma imagem diferente e real a cada artigo."
+        "\n  Inclua UMA imagem no artigo usando esta tag exata (escolha a URL mais relevante para o tema):"
+        "\n  Para artigos sobre alimentação: <img src='https://images.unsplash.com/photo-1490645935967-10de6ba17061?w=800' alt='alimentação saudável' style='width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;'>"
+        "\n  Para artigos sobre exercícios: <img src='https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=800' alt='exercícios' style='width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;'>"
+        "\n  Para artigos sobre emagrecimento: <img src='https://images.unsplash.com/photo-1505576399279-565b52d4ac71?w=800' alt='emagrecimento saudável' style='width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;'>"
+        "\n  Para artigos sobre saúde geral: <img src='https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=800' alt='saúde e bem-estar' style='width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;'>"
+        "\n  Para artigos sobre dieta/jejum: <img src='https://images.unsplash.com/photo-1498837167922-ddd27525d352?w=800' alt='dieta saudável' style='width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;'>"
         "\n- Tom: amigável, empático, motivador. Fale diretamente com o leitor usando 'você'."
         "\n- Sempre baseie o conteúdo nos resultados reais da web_search."
         + statute_section
@@ -960,8 +962,12 @@ TOOLS DISPONÍVEIS (use APENAS estas, exatamente com estes nomes):
 - affiliate.generate_promo        → args: {{"niche": "saude_emagrecimento", "format": "instagram|twitter|whatsapp|email"}}
 - blogger.publish_post            → args: {{"title": "Título chamativo com número ou promessa", "content": "HTML completo do artigo (mínimo 800 palavras)", "labels": ["saúde", "emagrecimento"], "affiliate_link": "https://...", "affiliate_product": "Nome do produto"}}
 
-IMAGEM OBRIGATÓRIA NO ARTIGO: inclua esta tag img no início do artigo (após a introdução), usando o número do ciclo como seed:
-<img src="https://picsum.photos/seed/{cycle_number}/800/400" alt="saúde e emagrecimento" style="width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;">
+IMAGEM OBRIGATÓRIA NO ARTIGO: inclua uma destas tags img no início do conteúdo (logo após a introdução), escolhendo a mais relevante para o tema:
+- Alimentação: <img src="https://images.unsplash.com/photo-1490645935967-10de6ba17061?w=800" alt="alimentação saudável" style="width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;">
+- Exercícios: <img src="https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=800" alt="exercícios em casa" style="width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;">
+- Emagrecimento: <img src="https://images.unsplash.com/photo-1505576399279-565b52d4ac71?w=800" alt="emagrecimento" style="width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;">
+- Saúde geral: <img src="https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=800" alt="saúde e bem-estar" style="width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;">
+- Dieta/Jejum: <img src="https://images.unsplash.com/photo-1498837167922-ddd27525d352?w=800" alt="dieta saudável" style="width:100%;max-width:700px;border-radius:8px;margin:16px 0;display:block;">
 
 FLUXO OBRIGATÓRIO A CADA CICLO:
 1. web_search → pesquise um tema DIFERENTE dos ciclos anteriores, sempre sobre saúde/emagrecimento
