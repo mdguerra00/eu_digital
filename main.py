@@ -189,15 +189,19 @@ def fetch_recent_cycles(agent_name: str, limit: int = 10) -> List[Dict[str, Any]
             REFLECTION_COL,
             NEXT_ACTIONS_COL,
         ]
-        res = (
-            sb.table(TABLE)
-            .select(", ".join(select_cols))
-            .eq(AGENT_NAME_COL, agent_name)
-            .order(CREATED_AT_COL, desc=True)
-            .limit(limit)
-            .execute()
-        )
-        return res.data or []
+        try:
+            res = (
+                sb.table(TABLE)
+                .select(", ".join(select_cols))
+                .eq(AGENT_NAME_COL, agent_name)
+                .order(CREATED_AT_COL, desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            log(f"[WARN] fetch_recent_cycles falhou no Supabase ({repr(e)}). Usando fallback local.")
+
     
     cycles_file = Path("agent_cycles.json")
     if not cycles_file.exists():
@@ -222,17 +226,21 @@ def fetch_last_cycle(agent_name: str) -> Optional[Dict[str, Any]]:
             RUN_ID_COL,
             AGENT_NAME_COL,
         ]
-        res = (
-            sb.table(TABLE)
-            .select(", ".join(select_cols))
-            .eq(AGENT_NAME_COL, agent_name)
-            .order(CREATED_AT_COL, desc=True)
-            .limit(1)
-            .execute()
-        )
-        if res.data:
-            return res.data[0]
-        return None
+        try:
+            res = (
+                sb.table(TABLE)
+                .select(", ".join(select_cols))
+                .eq(AGENT_NAME_COL, agent_name)
+                .order(CREATED_AT_COL, desc=True)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                return res.data[0]
+            return None
+        except Exception as e:
+            log(f"[WARN] fetch_last_cycle falhou no Supabase ({repr(e)}). Usando fallback local.")
+
     
     cycles_file = Path("agent_cycles.json")
     if not cycles_file.exists():
@@ -317,19 +325,23 @@ def get_next_cycle_number(agent_name: str) -> int:
             log(f"Aviso: falha ao calcular próximo ciclo via agent_cycles.json: {e}")
             return 1
 
-    res = (
-        sb.table(TABLE)
-        .select(CYCLE_NUMBER_COL)
-        .eq(AGENT_NAME_COL, agent_name)
-        .order(CYCLE_NUMBER_COL, desc=True)
-        .limit(1)
-        .execute()
-    )
+    try:
+        res = (
+            sb.table(TABLE)
+            .select(CYCLE_NUMBER_COL)
+            .eq(AGENT_NAME_COL, agent_name)
+            .order(CYCLE_NUMBER_COL, desc=True)
+            .limit(1)
+            .execute()
+        )
 
-    if res.data and res.data[0].get(CYCLE_NUMBER_COL) is not None:
-        return int(res.data[0][CYCLE_NUMBER_COL]) + 1
+        if res.data and res.data[0].get(CYCLE_NUMBER_COL) is not None:
+            return int(res.data[0][CYCLE_NUMBER_COL]) + 1
 
-    return 1
+        return 1
+    except Exception as e:
+        log(f"[WARN] get_next_cycle_number falhou no Supabase ({repr(e)}). Usando fallback local.")
+        return 1
 
 
 
@@ -374,7 +386,10 @@ def write_cycle(row: Dict[str, Any]) -> Dict[str, Any]:
     if sb is not None:
         try:
             res = sb.table(TABLE).insert(row).execute()
-        except APIError as e:
+        except Exception as e:
+            if not isinstance(e, APIError):
+                log(f"[WARN] write_cycle erro de rede/Supabase ({repr(e)}). Usando fallback local.")
+                return _write_cycle_local(row)
             error_payload = _coerce_api_error_payload(e)
 
             if not isinstance(error_payload, dict):
@@ -419,14 +434,24 @@ def write_cycle(row: Dict[str, Any]) -> Dict[str, Any]:
                 sanitized_row = dict(row)
                 sanitized_row.pop(missing_column, None)
                 log("Retry insert payload keys:", sorted(list(sanitized_row.keys())))
-                res = sb.table(TABLE).insert(sanitized_row).execute()
+                try:
+                    res = sb.table(TABLE).insert(sanitized_row).execute()
+                except Exception as retry_e:
+                    log(f"[WARN] write_cycle retry também falhou ({repr(retry_e)}). Usando fallback local.")
+                    return _write_cycle_local(row)
             else:
-                raise
+                log(f"[WARN] write_cycle falhou no Supabase ({repr(e)}). Usando fallback local.")
+                return _write_cycle_local(row)
 
         if not res.data:
-            raise RuntimeError(f"Insert falhou (sem data retornada). Response: {res}")
+            log("[WARN] write_cycle: Supabase não retornou dados. Usando fallback local.")
+            return _write_cycle_local(row)
         return res.data[0]
-    
+
+    return _write_cycle_local(row)
+
+
+def _write_cycle_local(row: Dict[str, Any]) -> Dict[str, Any]:
     log("[FALLBACK] Salvando ciclo em arquivo JSON local...")
     cycles_file = Path("agent_cycles.json")
     cycles = []
@@ -436,16 +461,17 @@ def write_cycle(row: Dict[str, Any]) -> Dict[str, Any]:
                 cycles = json.load(f)
         except Exception as e:
             log(f"Aviso ao ler cycles.json: {e}")
-    
+
+    row = dict(row)
     row["id"] = len(cycles) + 1
     cycles.append(row)
-    
+
     try:
         with open(cycles_file, 'w', encoding='utf-8') as f:
             json.dump(cycles, f, indent=2, ensure_ascii=False)
     except Exception as e:
         log(f"Erro ao salvar cycles.json: {e}")
-    
+
     return row
 
 
@@ -1339,5 +1365,31 @@ def main_loop() -> None:
             sleep_in_chunks(ERROR_RETRY_SECONDS)
 
 
+def _start_dashboard() -> None:
+    """Inicia o dashboard web em background thread, se disponível."""
+    try:
+        import sys
+        from pathlib import Path as _Path
+        # Adiciona o diretório raiz ao path para importar interface.app
+        _root = _Path(__file__).resolve().parent
+        if str(_root) not in sys.path:
+            sys.path.insert(0, str(_root))
+        from interface.app import app as _dashboard_app
+        _port = int(os.environ.get("PORT", os.environ.get("DASHBOARD_PORT", "5000")))
+        import threading as _threading
+        _t = _threading.Thread(
+            target=lambda: _dashboard_app.run(
+                host="0.0.0.0", port=_port, debug=False, threaded=True, use_reloader=False
+            ),
+            daemon=True,
+            name="dashboard",
+        )
+        _t.start()
+        log(f"[Dashboard] Interface disponível na porta {_port}")
+    except Exception as _e:
+        log(f"[Dashboard] Aviso: não foi possível iniciar o dashboard: {_e}")
+
+
 if __name__ == "__main__":
+    _start_dashboard()
     main_loop()
