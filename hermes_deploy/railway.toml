@@ -1,0 +1,16 @@
+[build]
+dockerfilePath = "hermes_deploy/Dockerfile"
+watchPatterns = ["hermes_deploy/**"]
+
+[deploy]
+startCommand = "/start.sh"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+[[deploy.envVars]]
+name = "HERMES_HOME"
+value = "/data/hermes"
+
+[[deploy.envVars]]
+name = "PYTHONUNBUFFERED"
+value = "1"

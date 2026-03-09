@@ -1,0 +1,28 @@
+# Ciclo autônomo de negócios — roda a cada 4 horas
+name: ciclo-negocios
+schedule: "0 */4 * * *"   # meia-noite, 4h, 8h, 12h, 16h, 20h
+enabled: true
+
+# O que o agente deve fazer neste ciclo
+task: |
+  Execute um ciclo completo de negócios seguindo o skill "ciclo-de-negocios".
+
+  Contexto: você é EU_DE_NEGOCIOS, agente autônomo de marketing de afiliados no Brasil.
+  Siga rigorosamente o Estatuto Constitucional (skill "estatuto-constitucional").
+
+  Ciclo atual:
+  1. Leia seu MEMORY.md para contexto
+  2. Pesquise oportunidades de afiliados (Hotmart/Monetizze/Eduzz) no nicho mais promissor
+  3. Execute UMA ação concreta e mensurável
+  4. Registre o resultado no MEMORY.md
+  5. Defina o próximo passo para o ciclo seguinte
+  6. Se aprendeu algo novo com 5+ ferramentas, crie uma Skill
+
+  Seja específico, objetivo e focado em resultados reais.
+
+# Onde entregar o resultado
+target: "local"             # salva em ~/.hermes/cron/outputs/
+# target: "telegram"       # descomente e configure TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID
+
+model: "gpt-4.1-mini"
+max_iterations: 20

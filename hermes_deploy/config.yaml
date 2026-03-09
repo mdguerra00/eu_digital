@@ -1,0 +1,37 @@
+# Hermes Agent — configuração para eu_digital (Railway)
+# Referência: cli-config.yaml.example do repo NousResearch/hermes-agent
+
+model:
+  default: "gpt-4.1-mini"          # mesmo modelo do eu_digital original
+  provider: "openai"                # usa OpenAI diretamente (não OpenRouter)
+
+execution:
+  environment: "local"
+  max_iterations: 30
+
+tools:
+  enabled:
+    - web                           # web_search, firecrawl
+    - file                          # leitura/escrita de arquivos
+    - memory                        # skills + MEMORY.md
+  disabled:
+    - terminal                      # segurança: sem execução de shell
+    - browser                       # habilite se quiser Steel Browser
+
+memory:
+  persistent: true
+  max_chars: 8000                   # limite do MEMORY.md
+  nudge_interval: 5                 # a cada 5 ciclos, o agente atualiza a memória
+
+context:
+  compression: true                 # comprime contexto longo automaticamente
+  compression_model: "gpt-4.1-mini"
+
+agent:
+  max_iterations: 20
+  reasoning_effort: "medium"
+  soul_file: "SOUL.md"             # personalidade/identidade do agente
+
+logging:
+  save_sessions: true
+  log_level: "info"
