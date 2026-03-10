@@ -1,16 +1,32 @@
 """
 daemon.py — Loop autônomo do hermes-agent para Railway.
 
-Não depende do CLI interativo do hermes. Importa diretamente o
-scheduler de cron e o mantém rodando como processo principal.
+Scheduler de cron autossuficiente. Lê jobs YAML de $HERMES_HOME/cron/
+e os executa via CLI do hermes-agent instalado em /opt/hermes.
+Não depende de nenhuma classe interna do repo clonado.
 """
+import glob
+import logging
 import os
+import shutil
+import signal
+import subprocess
 import sys
 import time
-import logging
-import signal
+from datetime import datetime
 from pathlib import Path
+
 from dotenv import load_dotenv
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+try:
+    from croniter import croniter
+except ImportError:
+    croniter = None
 
 # ── Configuração de ambiente ─────────────────────────────────────────────────
 HERMES_HOME = os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
@@ -19,11 +35,6 @@ os.environ["HERMES_HOME"] = HERMES_HOME
 env_file = Path(HERMES_HOME) / ".env"
 if env_file.exists():
     load_dotenv(env_file)
-
-# ── Path do hermes-agent clonado ─────────────────────────────────────────────
-HERMES_SRC = Path("/opt/hermes")
-if HERMES_SRC.exists() and str(HERMES_SRC) not in sys.path:
-    sys.path.insert(0, str(HERMES_SRC))
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -36,39 +47,162 @@ log = logging.getLogger("hermes-daemon")
 # ── Graceful shutdown ─────────────────────────────────────────────────────────
 _running = True
 
+
 def _handle_signal(sig, frame):
     global _running
     log.info(f"Sinal {sig} recebido. Encerrando...")
     _running = False
 
+
 signal.signal(signal.SIGTERM, _handle_signal)
-signal.signal(signal.SIGINT,  _handle_signal)
+signal.signal(signal.SIGINT, _handle_signal)
 
 
-# ── Iniciar scheduler ─────────────────────────────────────────────────────────
+# ── CronScheduler autossuficiente ────────────────────────────────────────────
+class CronScheduler:
+    def __init__(self, cron_dir: str = None):
+        self.cron_dir = cron_dir or str(Path(HERMES_HOME) / "cron")
+        self.jobs: list = []
+        self.next_runs: dict = {}
+        self._load_jobs()
+
+    def _load_jobs(self):
+        if not yaml:
+            log.error("PyYAML não instalado. Instale: pip install pyyaml")
+            return
+
+        pattern = str(Path(self.cron_dir) / "*.yaml")
+        for filepath in glob.glob(pattern):
+            try:
+                with open(filepath) as f:
+                    job = yaml.safe_load(f)
+                if job and job.get("enabled", True):
+                    self.jobs.append(job)
+                    log.info(f"Job carregado: {job['name']} ({job['schedule']})")
+            except Exception as e:
+                log.error(f"Erro ao carregar {filepath}: {e}")
+
+    def _compute_next_runs(self):
+        now = datetime.now()
+        for job in self.jobs:
+            name = job["name"]
+            if name not in self.next_runs:
+                if croniter:
+                    self.next_runs[name] = croniter(job["schedule"], now).get_next(datetime)
+                else:
+                    # fallback: roda imediatamente na primeira vez
+                    self.next_runs[name] = now
+
+    def tick(self):
+        now = datetime.now()
+        for job in self.jobs:
+            name = job["name"]
+            next_run = self.next_runs.get(name)
+            if next_run and now >= next_run:
+                log.info(f"Disparando job: {name}")
+                self._run_job(job)
+                # Agenda próxima execução
+                if croniter:
+                    self.next_runs[name] = croniter(job["schedule"], now).get_next(datetime)
+                else:
+                    # fallback: 4 horas
+                    from datetime import timedelta
+                    self.next_runs[name] = now + timedelta(hours=4)
+
+    def _run_job(self, job: dict):
+        task = job.get("task", "")
+        model = job.get("model", "gpt-4.1-mini")
+        max_iter = job.get("max_iterations", 20)
+
+        output_dir = Path(HERMES_HOME) / "cron" / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = output_dir / f"{job['name']}_{ts}.txt"
+
+        cmd = self._build_command(task, model, max_iter)
+        if not cmd:
+            log.error("Nenhum executável hermes encontrado em /opt/hermes ou PATH.")
+            return
+
+        try:
+            log.info(f"Executando: {cmd[0]} {cmd[1] if len(cmd) > 1 else ''} ...")
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=3600,
+                env={**os.environ},
+            )
+            output = result.stdout + result.stderr
+            with open(output_file, "w") as f:
+                f.write(output)
+
+            if result.returncode == 0:
+                log.info(f"Job '{job['name']}' concluído → {output_file}")
+            else:
+                log.error(f"Job '{job['name']}' falhou (code {result.returncode})")
+                log.error(output[-2000:])
+
+        except subprocess.TimeoutExpired:
+            log.error(f"Job '{job['name']}' timeout após 1 hora")
+        except Exception as e:
+            log.exception(f"Erro ao executar job '{job['name']}': {e}")
+
+    def _build_command(self, task: str, model: str, max_iter: int) -> list:
+        """Detecta o executável do hermes e monta o comando."""
+        # 1. hermes no PATH (pip install -e . cria o entry point)
+        if shutil.which("hermes"):
+            return ["hermes", "run", "--task", task, "--model", model,
+                    "--max-iterations", str(max_iter)]
+
+        # 2. python -m hermes (quando o entry point não está no PATH)
+        hermes_src = Path("/opt/hermes")
+        if (hermes_src / "hermes").is_dir() or (hermes_src / "hermes.py").exists():
+            return [sys.executable, "-m", "hermes", "run",
+                    "--task", task, "--model", model,
+                    "--max-iterations", str(max_iter)]
+
+        # 3. script direto
+        for candidate in [hermes_src / "main.py", hermes_src / "cli.py"]:
+            if candidate.exists():
+                return [sys.executable, str(candidate),
+                        "run", "--task", task, "--model", model,
+                        "--max-iterations", str(max_iter)]
+
+        return []
+
+    def start(self):
+        self._compute_next_runs()
+        log.info(f"Scheduler iniciado com {len(self.jobs)} job(s).")
+        for name, next_run in self.next_runs.items():
+            log.info(f"  → {name}: próxima execução em {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    def stop(self):
+        log.info("Scheduler encerrado.")
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     log.info("Hermes daemon iniciado.")
     log.info(f"HERMES_HOME = {HERMES_HOME}")
 
-    try:
-        from cron.scheduler import CronScheduler
-        scheduler = CronScheduler()
-        scheduler.start()          # thread background: tick() a cada 60s
-        log.info("CronScheduler ativo — verificando jobs a cada 60s.")
-
-        while _running:
-            time.sleep(5)
-
-        scheduler.stop()
-        log.info("Daemon encerrado.")
-
-    except ImportError as e:
-        log.error(f"Falha ao importar CronScheduler: {e}")
-        log.error("Verifique se o hermes-agent está instalado em /opt/hermes")
+    if not yaml:
+        log.error("PyYAML não instalado. pip install pyyaml")
         sys.exit(1)
-    except Exception as e:
-        log.exception(f"Erro inesperado no daemon: {e}")
-        sys.exit(1)
+
+    if not croniter:
+        log.warning("croniter não instalado — próximas execuções em intervalos fixos de 4h.")
+
+    scheduler = CronScheduler()
+    scheduler.start()
+    log.info("CronScheduler ativo — verificando jobs a cada 60s.")
+
+    while _running:
+        scheduler.tick()
+        time.sleep(60)
+
+    scheduler.stop()
+    log.info("Daemon encerrado.")
 
 
 if __name__ == "__main__":
