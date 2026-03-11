@@ -112,16 +112,26 @@ def _get_credentials() -> Optional[Credentials]:
         logger.error("[BloggerToken] Nenhuma credencial encontrada.")
         return None
 
-    # Renova se expirado
-    if creds.expired and creds.refresh_token:
+    # CORRIGIDO: Sempre renova se temos refresh_token.
+    # Credentials.from_authorized_user_info() define expiry=None,
+    # fazendo creds.expired retornar False mesmo com token expirado.
+    # Forçar refresh garante que sempre temos um access_token válido.
+    if creds.refresh_token:
         try:
-            logger.info("[BloggerToken] Token expirado, renovando...")
+            logger.info("[BloggerToken] Renovando token via refresh_token...")
             creds.refresh(Request())
             _save_token_to_supabase(creds.to_json())
             logger.info("[BloggerToken] Token renovado e salvo no Supabase.")
         except Exception as e:
             logger.error(f"[BloggerToken] Falha ao renovar token: {e}")
+            # Se o refresh falhar mas ainda temos um token, tentar usá-lo
+            if creds.token:
+                logger.warning("[BloggerToken] Usando token existente (pode estar expirado).")
+                return creds
             return None
+    elif not creds.token:
+        logger.error("[BloggerToken] Sem token e sem refresh_token.")
+        return None
 
     return creds
 
@@ -204,32 +214,48 @@ def publish_post(
         "labels": labels or ["saúde", "emagrecimento"],
     }
 
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-
-        result = {
-            "success": True,
-            "post_id": data.get("id"),
-            "url": data.get("url"),
-            "title": data.get("title"),
-            "published_at": data.get("published"),
-        }
-        logger.info(f"Artigo publicado: {result['url']}")
-        return result
-
-    except requests.exceptions.HTTPError as e:
-        error_detail = ""
+    for attempt in range(2):
         try:
-            error_detail = e.response.json().get("error", {}).get("message", "")
-        except Exception:
-            pass
-        logger.error(f"Erro HTTP ao publicar: {e} — {error_detail}")
-        return {"success": False, "error": str(e), "detail": error_detail}
-    except Exception as e:
-        logger.error(f"Erro ao publicar no Blogger: {e}")
-        return {"success": False, "error": str(e)}
+            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+
+            result = {
+                "success": True,
+                "post_id": data.get("id"),
+                "url": data.get("url"),
+                "title": data.get("title"),
+                "published_at": data.get("published"),
+            }
+            logger.info(f"Artigo publicado: {result['url']}")
+            return result
+
+        except requests.exceptions.HTTPError as e:
+            error_detail = ""
+            try:
+                error_detail = e.response.json().get("error", {}).get("message", "")
+            except Exception:
+                pass
+
+            # CORRIGIDO: Se 403 na primeira tentativa, forçar refresh e tentar novamente
+            if e.response.status_code == 403 and attempt == 0 and creds.refresh_token:
+                logger.warning(f"[Blogger] 403 Forbidden (tentativa 1). Forçando refresh do token...")
+                try:
+                    creds.refresh(Request())
+                    _save_token_to_supabase(creds.to_json())
+                    headers["Authorization"] = f"Bearer {creds.token}"
+                    logger.info("[Blogger] Token renovado. Tentando publicar novamente...")
+                    continue  # retry
+                except Exception as refresh_err:
+                    logger.error(f"[Blogger] Refresh falhou: {refresh_err}")
+
+            logger.error(f"Erro HTTP ao publicar: {e} — {error_detail}")
+            return {"success": False, "error": str(e), "detail": error_detail}
+        except Exception as e:
+            logger.error(f"Erro ao publicar no Blogger: {e}")
+            return {"success": False, "error": str(e)}
+
+    return {"success": False, "error": "Falha após 2 tentativas de publicação."}
 
 
 def list_recent_posts(max_results: int = 5) -> list:

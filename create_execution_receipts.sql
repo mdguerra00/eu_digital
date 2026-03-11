@@ -166,3 +166,18 @@ on public.execution_receipts
 for select
 to service_role
 using (true);
+
+-- Policies para anon (fallback quando service_role não está disponível)
+drop policy if exists execution_receipts_anon_insert on public.execution_receipts;
+create policy execution_receipts_anon_insert
+on public.execution_receipts
+for insert
+to anon
+with check (run_id is not null and cycle_number is not null and step_id is not null);
+
+drop policy if exists execution_receipts_anon_select on public.execution_receipts;
+create policy execution_receipts_anon_select
+on public.execution_receipts
+for select
+to anon
+using (true);
