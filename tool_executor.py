@@ -313,7 +313,7 @@ class ToolExecutor:
             if urls:
                 enrichment_scrape = self._execute_scrape(urls[0])
 
-            return {
+            search_output = {
                 "tool": "web_search",
                 "query": query,
                 "success": result.get("success", False),
@@ -327,6 +327,14 @@ class ToolExecutor:
                 "provider": (result.get("provider_meta") or {}).get("provider", "unknown"),
                 "enrichment_scrape": enrichment_scrape,
             }
+
+            # CORRIGIDO: Propagar erro e detalhes quando a busca falha
+            if not result.get("success", False):
+                search_output["error"] = result.get("error", "busca retornou success=false sem detalhes")
+                if result.get("details"):
+                    search_output["error_details"] = result["details"]
+
+            return search_output
         except Exception as e:
             return {
                 "tool": "web_search",
