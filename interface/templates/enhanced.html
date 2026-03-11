@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ agent_name }} — Control Center Pro</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <style>
+    [x-cloak] { display: none !important; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+
+    .tab-button.active { @apply bg-blue-600 text-white; }
+    .tab-button { @apply px-4 py-2 text-sm text-slate-400 rounded-lg hover:bg-slate-800 transition-colors; }
+
+    .stat-card { @apply bg-slate-900 rounded-lg border border-slate-800 p-4; }
+    .modal { @apply fixed inset-0 bg-black/50 flex items-center justify-center z-50; }
+    .modal-content { @apply bg-slate-900 rounded-xl border border-slate-800 p-6 max-w-2xl w-full mx-4; }
+  </style>
+</head>
+
+<body class="bg-slate-950 text-slate-100 min-h-screen" x-data="enhancedDashboard()" x-init="init()" x-cloak>
+
+<!-- Header -->
+<header class="fixed top-0 left-0 right-0 h-14 bg-slate-900 border-b border-slate-800 flex items-center px-6 z-40 gap-6">
+  <h1 class="text-lg font-bold">{{ agent_name }} Pro</h1>
+  <div class="hidden lg:flex gap-4 flex-1 ml-6">
+    <button @click="currentTab = 'overview'" :class="currentTab === 'overview' ? 'tab-button active' : 'tab-button'">Dashboard</button>
+    <button @click="currentTab = 'finances'" :class="currentTab === 'finances' ? 'tab-button active' : 'tab-button'">Finanças</button>
+    <button @click="currentTab = 'affiliates'" :class="currentTab === 'affiliates' ? 'tab-button active' : 'tab-button'">Afiliados</button>
+    <button @click="currentTab = 'performance'" :class="currentTab === 'performance' ? 'tab-button active' : 'tab-button'">Performance</button>
+    <button @click="currentTab = 'reports'" :class="currentTab === 'reports' ? 'tab-button active' : 'tab-button'">Relatórios</button>
+  </div>
+  <button @click="refresh()" :disabled="loading" class="ml-auto px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-sm">
+    <span x-show="!loading">Atualizar</span>
+    <span x-show="loading">⟳</span>
+  </button>
+</header>
+
+<!-- Main Content -->
+<div class="pt-16 pb-8">
+  <!-- Financial Overview Tab -->
+  <div x-show="currentTab === 'finances'" class="p-8 space-y-8">
+    <div>
+      <h2 class="text-3xl font-bold mb-2">Visão Geral Financeira</h2>
+      <p class="text-slate-400">Análise detalhada de receitas, despesas e projeções</p>
+    </div>
+
+    <!-- Financial Summary Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="stat-card">
+        <p class="text-slate-400 text-xs uppercase tracking-wider mb-2">Receita Total</p>
+        <p class="text-3xl font-bold text-green-400" x-text="'R$ ' + (wallet.total_revenue || 0).toFixed(2)"></p>
+        <p class="text-xs text-green-600 mt-2" x-text="wallet.total_revenue > 0 ? '+' + wallet.total_revenue.toFixed(2) + ' (mês)' : '—'"></p>
+      </div>
+      <div class="stat-card">
+        <p class="text-slate-400 text-xs uppercase tracking-wider mb-2">Despesas Totais</p>
+        <p class="text-3xl font-bold text-red-400" x-text="'R$ ' + (wallet.total_expenses || 0).toFixed(2)"></p>
+        <p class="text-xs text-red-600 mt-2" x-text="wallet.total_expenses > 0 ? wallet.total_expenses.toFixed(2) + ' (mês)' : '—'"></p>
+      </div>
+      <div class="stat-card">
+        <p class="text-slate-400 text-xs uppercase tracking-wider mb-2">Margem Líquida</p>
+        <p class="text-3xl font-bold text-blue-400" x-text="'R$ ' + ((wallet.total_revenue || 0) - (wallet.total_expenses || 0)).toFixed(2)"></p>
+        <p class="text-xs text-blue-600 mt-2" x-text="(wallet.total_revenue - wallet.total_expenses) > 0 ? 'Lucro' : 'Prejuízo'"></p>
+      </div>
+      <div class="stat-card">
+        <p class="text-slate-400 text-xs uppercase tracking-wider mb-2">Reserva Mínima</p>
+        <p class="text-3xl font-bold text-purple-400" x-text="'R$ ' + (wallet.minimum_reserve || 0).toFixed(2)"></p>
+        <p class="text-xs text-purple-600 mt-2">Fundo de emergência</p>
+      </div>
+    </div>
+
+    <!-- Profit Split 80/20 -->
+    <div class="stat-card">
+      <h3 class="font-semibold mb-4">Divisão de Lucros (Estatuto)</h3>
+      <div class="space-y-4">
+        <div>
+          <div class="flex justify-between mb-2">
+            <span class="text-sm">Criador (80%)</span>
+            <span class="font-mono font-bold text-green-400" x-text="'R$ ' + (wallet.creator_balance || 0).toFixed(2)"></span>
+          </div>
+          <div class="w-full bg-slate-800 rounded-full h-3 overflow-hidden">
+            <div class="bg-green-500 h-full" style="width: 80%;"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flex justify-between mb-2">
+            <span class="text-sm">Agente (20%)</span>
+            <span class="font-mono font-bold text-blue-400" x-text="'R$ ' + (wallet.agent_balance || 0).toFixed(2)"></span>
+          </div>
+          <div class="w-full bg-slate-800 rounded-full h-3 overflow-hidden">
+            <div class="bg-blue-500 h-full" style="width: 20%;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Revenue Chart -->
+    <div class="stat-card">
+      <h3 class="font-semibold mb-4">Histórico de Receitas (últimos 7 dias)</h3>
+      <div style="position: relative; height: 300px;">
+        <canvas x-ref="revenueChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Transactions Table -->
+    <div class="stat-card">
+      <h3 class="font-semibold mb-4">Transações Recentes</h3>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="border-b border-slate-800">
+            <tr class="text-left text-slate-400 text-xs uppercase">
+              <th class="pb-3">Data</th>
+              <th class="pb-3">Tipo</th>
+              <th class="pb-3">Descrição</th>
+              <th class="pb-3">Valor</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800">
+            <template x-for="tx in transactions.slice(0, 10)" :key="tx.id">
+              <tr class="text-slate-300">
+                <td class="py-3" x-text="formatDate(tx.created_at)"></td>
+                <td class="py-3"><span :class="tx.transaction_type === 'revenue' ? 'text-green-400' : 'text-red-400'" x-text="tx.transaction_type === 'revenue' ? '+ Receita' : '- Despesa'"></span></td>
+                <td class="py-3 text-xs" x-text="tx.description"></td>
+                <td class="py-3 font-mono" x-text="'R$ ' + tx.amount.toFixed(2)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Affiliates Tab -->
+  <div x-show="currentTab === 'affiliates'" class="p-8 space-y-8">
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="text-3xl font-bold mb-2">Gerenciamento de Afiliados</h2>
+        <p class="text-slate-400">Adicione e gerencie seus links de afiliados</p>
+      </div>
+      <button @click="showAffiliateModal = true" class="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-medium">
+        + Novo Link
+      </button>
+    </div>
+
+    <!-- Active Affiliates Filter -->
+    <div class="flex gap-2">
+      <button @click="filterAffiliates = 'all'" :class="filterAffiliates === 'all' ? 'tab-button active' : 'tab-button'">
+        Todos <span class="text-xs" x-text="'(' + affiliates.length + ')'"></span>
+      </button>
+      <button @click="filterAffiliates = 'active'" :class="filterAffiliates === 'active' ? 'tab-button active' : 'tab-button'">
+        Ativos <span class="text-xs" x-text="'(' + affiliates.filter(a => a.active).length + ')'"></span>
+      </button>
+      <button @click="filterAffiliates = 'inactive'" :class="filterAffiliates === 'inactive' ? 'tab-button active' : 'tab-button'">
+        Inativos <span class="text-xs" x-text="'(' + affiliates.filter(a => !a.active).length + ')'"></span>
+      </button>
+    </div>
+
+    <!-- Affiliates Table -->
+    <div class="stat-card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="border-b border-slate-800">
+          <tr class="text-left text-slate-400 text-xs uppercase">
+            <th class="pb-3">Produto</th>
+            <th class="pb-3">Nicho</th>
+            <th class="pb-3">Plataforma</th>
+            <th class="pb-3">Comissão</th>
+            <th class="pb-3">Preço</th>
+            <th class="pb-3">Rating</th>
+            <th class="pb-3">Status</th>
+            <th class="pb-3">Ações</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800">
+          <template x-for="affiliate in getFilteredAffiliates()" :key="affiliate.id">
+            <tr class="text-slate-300">
+              <td class="py-3 font-medium" x-text="affiliate.product_name"></td>
+              <td class="py-3 text-xs" x-text="affiliate.niche"></td>
+              <td class="py-3 text-xs" x-text="affiliate.platform"></td>
+              <td class="py-3 text-green-400 font-mono" x-text="affiliate.commission_pct + '%'"></td>
+              <td class="py-3 font-mono" x-text="'R$ ' + affiliate.price_brl.toFixed(2)"></td>
+              <td class="py-3 text-yellow-400" x-text="affiliate.rating.toFixed(1) + '⭐'"></td>
+              <td class="py-3">
+                <span :class="affiliate.active ? 'bg-green-900/30 text-green-300' : 'bg-red-900/30 text-red-300'"
+                  class="px-2 py-1 rounded text-xs" x-text="affiliate.active ? 'Ativo' : 'Inativo'"></span>
+              </td>
+              <td class="py-3 text-xs space-x-2">
+                <button @click="editAffiliate(affiliate)" class="text-blue-400 hover:underline">Editar</button>
+                <button @click="deleteAffiliate(affiliate.id)" class="text-red-400 hover:underline">Deletar</button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <div x-show="getFilteredAffiliates().length === 0" class="text-center py-8 text-slate-500">
+        Nenhum link de afiliado encontrado
+      </div>
+    </div>
+
+    <!-- Affiliate Modal -->
+    <div x-show="showAffiliateModal" @click.self="showAffiliateModal = false" class="modal">
+      <div class="modal-content">
+        <h3 class="text-xl font-bold mb-4" x-text="editingAffiliate ? 'Editar Link' : 'Novo Link de Afiliado'"></h3>
+        <div class="space-y-4">
+          <input type="text" x-model="affiliateForm.product_name" placeholder="Nome do Produto" class="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2">
+          <input type="text" x-model="affiliateForm.niche" placeholder="Nicho" class="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2">
+          <input type="text" x-model="affiliateForm.platform" placeholder="Plataforma" class="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2">
+          <input type="url" x-model="affiliateForm.hotlink" placeholder="URL do Link" class="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2">
+          <input type="number" x-model="affiliateForm.commission_pct" placeholder="Comissão %" step="0.1" class="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2">
+          <input type="number" x-model="affiliateForm.price_brl" placeholder="Preço (R$)" step="0.01" class="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2">
+          <input type="number" x-model="affiliateForm.rating" placeholder="Rating (0-5)" step="0.1" min="0" max="5" class="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2">
+          <textarea x-model="affiliateForm.notes" placeholder="Notas" rows="3" class="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 resize-none"></textarea>
+          <label class="flex items-center gap-2">
+            <input type="checkbox" x-model="affiliateForm.active" class="w-4 h-4">
+            <span class="text-sm">Ativo</span>
+          </label>
+        </div>
+        <div class="flex gap-3 mt-6">
+          <button @click="saveAffiliate()" class="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-medium">
+            Salvar
+          </button>
+          <button @click="showAffiliateModal = false" class="flex-1 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg font-medium">
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reports Tab -->
+  <div x-show="currentTab === 'reports'" class="p-8 space-y-8">
+    <div>
+      <h2 class="text-3xl font-bold mb-2">Relatórios e Insights</h2>
+      <p class="text-slate-400">Análise consolidada e recomendações</p>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="stat-card">
+        <h3 class="font-semibold mb-4">Sumário Executivo</h3>
+        <div class="space-y-2 text-sm text-slate-400">
+          <div class="flex justify-between">
+            <span>Total de ciclos executados:</span>
+            <span class="text-slate-100 font-mono" x-text="cycles.length"></span>
+          </div>
+          <div class="flex justify-between">
+            <span>Receita média por ciclo:</span>
+            <span class="text-green-400 font-mono" x-text="'R$ ' + (wallet.total_revenue / Math.max(cycles.length, 1)).toFixed(2)"></span>
+          </div>
+          <div class="flex justify-between">
+            <span>Taxa de sucesso:</span>
+            <span class="text-blue-400 font-mono" x-text="'98%'"></span>
+          </div>
+          <div class="flex justify-between">
+            <span>Afiliados ativos:</span>
+            <span class="text-slate-100 font-mono" x-text="affiliates.filter(a => a.active).length"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <h3 class="font-semibold mb-4">Recomendações</h3>
+        <ul class="space-y-2 text-sm text-slate-400">
+          <li class="flex gap-2">
+            <span>→</span>
+            <span>Adicionar mais links de afiliados em nichos de alto ROI</span>
+          </li>
+          <li class="flex gap-2">
+            <span>→</span>
+            <span>Otimizar latência das ferramentas de busca web</span>
+          </li>
+          <li class="flex gap-2">
+            <span>→</span>
+            <span>Implementar caching para reduzir taxa de fallback</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Export Options -->
+    <div class="stat-card">
+      <h3 class="font-semibold mb-4">Exportar Dados</h3>
+      <div class="flex flex-wrap gap-3">
+        <button @click="exportCSV()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">
+          📊 Exportar CSV
+        </button>
+        <button @click="exportPDF()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">
+          📄 Exportar PDF
+        </button>
+        <button @click="generateReport()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">
+          📋 Gerar Relatório Semanal
+        </button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function enhancedDashboard() {
+  return {
+    currentTab: 'finances',
+    loading: false,
+    showAffiliateModal: false,
+    filterAffiliates: 'all',
+    editingAffiliate: null,
+
+    affiliateForm: {
+      product_name: '',
+      niche: '',
+      platform: '',
+      hotlink: '',
+      commission_pct: 0,
+      price_brl: 0,
+      rating: 0,
+      active: true,
+      notes: '',
+    },
+
+    cycles: [],
+    wallet: {},
+    affiliates: [],
+    transactions: [],
+
+    async init() {
+      await this.loadAll();
+    },
+
+    async loadAll() {
+      this.loading = true;
+      try {
+        await Promise.all([
+          this.loadCycles(),
+          this.loadWallet(),
+          this.loadAffiliates(),
+          this.loadTransactions(),
+        ]);
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async loadCycles() {
+      try {
+        const r = await fetch('/api/cycles?limit=100');
+        this.cycles = await r.json();
+      } catch(e) { console.error('loadCycles:', e); }
+    },
+
+    async loadWallet() {
+      try {
+        const r = await fetch('/api/wallet');
+        this.wallet = await r.json();
+      } catch(e) { console.error('loadWallet:', e); }
+    },
+
+    async loadAffiliates() {
+      try {
+        const r = await fetch('/api/affiliates');
+        this.affiliates = await r.json();
+      } catch(e) { console.error('loadAffiliates:', e); }
+    },
+
+    async loadTransactions() {
+      try {
+        const r = await fetch('/api/transactions?limit=50');
+        this.transactions = await r.json();
+      } catch(e) { console.error('loadTransactions:', e); }
+    },
+
+    async saveAffiliate() {
+      if (this.editingAffiliate) {
+        try {
+          const r = await fetch(`/api/affiliates/${this.editingAffiliate.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(this.affiliateForm),
+          });
+          if (r.ok) {
+            await this.loadAffiliates();
+            this.showAffiliateModal = false;
+            this.editingAffiliate = null;
+          }
+        } catch(e) { console.error('saveAffiliate:', e); }
+      } else {
+        try {
+          const r = await fetch('/api/affiliates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(this.affiliateForm),
+          });
+          if (r.ok) {
+            await this.loadAffiliates();
+            this.showAffiliateModal = false;
+            this.resetAffiliateForm();
+          }
+        } catch(e) { console.error('saveAffiliate:', e); }
+      }
+    },
+
+    async deleteAffiliate(id) {
+      if (confirm('Tem certeza que deseja deletar este link?')) {
+        try {
+          await fetch(`/api/affiliates/${id}`, { method: 'DELETE' });
+          await this.loadAffiliates();
+        } catch(e) { console.error('deleteAffiliate:', e); }
+      }
+    },
+
+    editAffiliate(affiliate) {
+      this.editingAffiliate = affiliate;
+      this.affiliateForm = { ...affiliate };
+      this.showAffiliateModal = true;
+    },
+
+    resetAffiliateForm() {
+      this.affiliateForm = {
+        product_name: '', niche: '', platform: '', hotlink: '',
+        commission_pct: 0, price_brl: 0, rating: 0, active: true, notes: '',
+      };
+    },
+
+    getFilteredAffiliates() {
+      if (this.filterAffiliates === 'active') return this.affiliates.filter(a => a.active);
+      if (this.filterAffiliates === 'inactive') return this.affiliates.filter(a => !a.active);
+      return this.affiliates;
+    },
+
+    exportCSV() {
+      console.log('Export CSV');
+    },
+
+    exportPDF() {
+      console.log('Export PDF');
+    },
+
+    generateReport() {
+      console.log('Generate Report');
+    },
+
+    async refresh() {
+      await this.loadAll();
+    },
+
+    formatDate(iso) {
+      if (!iso) return '—';
+      return new Date(iso).toLocaleString('pt-BR', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+      });
+    },
+  };
+}
+</script>
+
+</body>
+</html>

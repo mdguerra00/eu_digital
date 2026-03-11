@@ -52,6 +52,11 @@ RECEIPTS_TABLE = os.environ.get("EXECUTION_RECEIPTS_TABLE", "execution_receipts"
 CREATOR_MESSAGES_TABLE = os.environ.get("CREATOR_MESSAGES_TABLE", "creator_messages")
 WALLET_BALANCE_TABLE = "agent_wallet_balance"
 WALLET_TX_TABLE = "agent_wallet_transactions"
+ALERTS_TABLE = "system_alerts"
+AUDIT_LOG_TABLE = "audit_log"
+PERFORMANCE_METRICS_TABLE = "performance_metrics"
+SERVICE_HEALTH_TABLE = "service_health"
+AFFILIATE_LINKS_TABLE = "affiliate_links"
 
 # Diretório raiz do projeto (parent de interface/)
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -367,6 +372,16 @@ threading.Thread(target=_poller_loop, daemon=True, name="sse-poller").start()
 # ──────────────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
+    return render_template("dashboard.html", agent_name=AGENT_NAME)
+
+
+@app.route("/pro")
+def pro():
+    return render_template("enhanced.html", agent_name=AGENT_NAME)
+
+
+@app.route("/classic")
+def classic():
     return render_template("index.html", agent_name=AGENT_NAME)
 
 
@@ -455,6 +470,297 @@ def sse():
             "Connection": "keep-alive",
         },
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Alerts and Health Monitoring
+# ──────────────────────────────────────────────────────────────────────────────
+def get_alerts(limit: int = 50) -> List[Dict]:
+    if sb is not None:
+        try:
+            res = (
+                sb.table(ALERTS_TABLE)
+                .select("*")
+                .eq("agent_name", AGENT_NAME)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            print(f"[WARN] get_alerts: {e}")
+    return []
+
+
+def get_service_health() -> List[Dict]:
+    if sb is not None:
+        try:
+            res = (
+                sb.table(SERVICE_HEALTH_TABLE)
+                .select("*")
+                .order("updated_at", desc=True)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            print(f"[WARN] get_service_health: {e}")
+    return []
+
+
+def get_audit_log(limit: int = 100) -> List[Dict]:
+    if sb is not None:
+        try:
+            res = (
+                sb.table(AUDIT_LOG_TABLE)
+                .select("*")
+                .eq("agent_name", AGENT_NAME)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            print(f"[WARN] get_audit_log: {e}")
+    return []
+
+
+def get_performance_metrics(metric_type: Optional[str] = None, limit: int = 100) -> List[Dict]:
+    if sb is not None:
+        try:
+            query = (
+                sb.table(PERFORMANCE_METRICS_TABLE)
+                .select("*")
+                .eq("agent_name", AGENT_NAME)
+            )
+            if metric_type:
+                query = query.eq("metric_type", metric_type)
+            res = query.order("created_at", desc=True).limit(limit).execute()
+            return res.data or []
+        except Exception as e:
+            print(f"[WARN] get_performance_metrics: {e}")
+    return []
+
+
+def log_audit_action(action: str, resource_type: str = "", resource_id: str = "", changes: Dict = None) -> bool:
+    if sb is None:
+        return False
+    try:
+        sb.table(AUDIT_LOG_TABLE).insert({
+            "agent_name": AGENT_NAME,
+            "action": action,
+            "actor": "user",
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "changes": changes or {},
+            "created_at": utc_now_iso(),
+        }).execute()
+        return True
+    except Exception as e:
+        print(f"[WARN] log_audit_action: {e}")
+        return False
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# API Routes — Control & Configuration
+# ──────────────────────────────────────────────────────────────────────────────
+@app.route("/api/alerts", methods=["GET"])
+def api_alerts():
+    limit = min(int(request.args.get("limit", 50)), 200)
+    return jsonify(get_alerts(limit=limit))
+
+
+@app.route("/api/alerts/<alert_id>/resolve", methods=["POST"])
+def api_resolve_alert(alert_id: str):
+    if sb is None:
+        return jsonify({"success": False, "error": "Supabase não configurado"}), 503
+    try:
+        sb.table(ALERTS_TABLE).update({
+            "resolved": True,
+            "resolved_at": utc_now_iso(),
+        }).eq("id", alert_id).execute()
+        log_audit_action("alert_resolved", "alert", alert_id)
+        _broadcast({"type": "alert_resolved", "alert_id": alert_id})
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    return jsonify(get_service_health())
+
+
+@app.route("/api/audit-log", methods=["GET"])
+def api_audit_log():
+    limit = min(int(request.args.get("limit", 100)), 500)
+    return jsonify(get_audit_log(limit=limit))
+
+
+@app.route("/api/metrics", methods=["GET"])
+def api_metrics():
+    metric_type = request.args.get("type")
+    limit = min(int(request.args.get("limit", 100)), 500)
+    return jsonify(get_performance_metrics(metric_type=metric_type, limit=limit))
+
+
+@app.route("/api/config", methods=["GET"])
+def api_get_config():
+    return jsonify({
+        "agent_name": AGENT_NAME,
+        "model": os.environ.get("MODEL", "gpt-4.1-mini"),
+        "temperature": float(os.environ.get("TEMPERATURE", "0.7")),
+        "loop_interval_minutes": int(os.environ.get("LOOP_INTERVAL_MINUTES", "20")),
+        "memory_window": int(os.environ.get("MEMORY_WINDOW", "10")),
+        "agent_mode": os.environ.get("AGENT_MODE", "real"),
+        "supabase_connected": sb is not None,
+    })
+
+
+@app.route("/api/config/prompt", methods=["PUT"])
+def api_update_prompt():
+    body = request.get_json(force=True) or {}
+    new_prompt = (body.get("prompt") or "").strip()
+    if not new_prompt:
+        return jsonify({"success": False, "error": "Prompt vazio"}), 400
+
+    if sb is None:
+        return jsonify({"success": False, "error": "Supabase não configurado"}), 503
+
+    try:
+        sb.table(STATE_TABLE).upsert({
+            "agent_name": AGENT_NAME,
+            "current_task_prompt": new_prompt,
+            "updated_at": utc_now_iso(),
+        }).execute()
+        log_audit_action("prompt_updated", "agent_state", AGENT_NAME, {"new_prompt": new_prompt[:100]})
+        _broadcast({"type": "prompt_changed", "prompt": new_prompt})
+        return jsonify({"success": True, "prompt": new_prompt})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/control/pause", methods=["POST"])
+def api_pause_agent():
+    if sb is None:
+        return jsonify({"success": False, "error": "Supabase não configurado"}), 503
+    try:
+        sb.table(STATE_TABLE).upsert({
+            "agent_name": AGENT_NAME,
+            "agent_paused": True,
+            "updated_at": utc_now_iso(),
+        }).execute()
+        log_audit_action("agent_paused", "agent_state", AGENT_NAME)
+        _broadcast({"type": "agent_paused"})
+        return jsonify({"success": True, "status": "paused"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/control/resume", methods=["POST"])
+def api_resume_agent():
+    if sb is None:
+        return jsonify({"success": False, "error": "Supabase não configurado"}), 503
+    try:
+        sb.table(STATE_TABLE).upsert({
+            "agent_name": AGENT_NAME,
+            "agent_paused": False,
+            "updated_at": utc_now_iso(),
+        }).execute()
+        log_audit_action("agent_resumed", "agent_state", AGENT_NAME)
+        _broadcast({"type": "agent_resumed"})
+        return jsonify({"success": True, "status": "running"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# API Routes — Affiliate Management
+# ──────────────────────────────────────────────────────────────────────────────
+@app.route("/api/affiliates", methods=["GET"])
+def api_get_affiliates():
+    if sb is None:
+        return jsonify([]), 200
+    try:
+        active_only = request.args.get("active_only", "false").lower() == "true"
+        query = sb.table(AFFILIATE_LINKS_TABLE).select("*")
+        if active_only:
+            query = query.eq("active", True)
+        res = query.order("commission_pct", desc=True).execute()
+        return jsonify(res.data or [])
+    except Exception as e:
+        print(f"[WARN] get_affiliates: {e}")
+        return jsonify([]), 200
+
+
+@app.route("/api/affiliates", methods=["POST"])
+def api_create_affiliate():
+    if sb is None:
+        return jsonify({"success": False, "error": "Supabase não configurado"}), 503
+    body = request.get_json(force=True) or {}
+    try:
+        link_data = {
+            "agent_name": AGENT_NAME,
+            "product_name": body.get("product_name", "").strip(),
+            "platform": body.get("platform", "").strip(),
+            "niche": body.get("niche", "").strip(),
+            "hotlink": body.get("hotlink", "").strip(),
+            "commission_pct": float(body.get("commission_pct", 0)),
+            "price_brl": float(body.get("price_brl", 0)),
+            "rating": float(body.get("rating", 0)),
+            "active": body.get("active", True),
+            "notes": body.get("notes", "").strip(),
+            "created_at": utc_now_iso(),
+        }
+
+        res = sb.table(AFFILIATE_LINKS_TABLE).insert(link_data).execute()
+        if res.data:
+            log_audit_action("affiliate_added", "affiliate_links", res.data[0].get("id"), link_data)
+            _broadcast({"type": "affiliate_added", "data": res.data[0]})
+            return jsonify({"success": True, "data": res.data[0]}), 201
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/affiliates/<link_id>", methods=["PUT"])
+def api_update_affiliate(link_id: str):
+    if sb is None:
+        return jsonify({"success": False, "error": "Supabase não configurado"}), 503
+    body = request.get_json(force=True) or {}
+    try:
+        update_data = {}
+        if "product_name" in body:
+            update_data["product_name"] = body["product_name"].strip()
+        if "niche" in body:
+            update_data["niche"] = body["niche"].strip()
+        if "commission_pct" in body:
+            update_data["commission_pct"] = float(body["commission_pct"])
+        if "active" in body:
+            update_data["active"] = bool(body["active"])
+        if "notes" in body:
+            update_data["notes"] = body["notes"].strip()
+
+        update_data["updated_at"] = utc_now_iso()
+
+        res = sb.table(AFFILIATE_LINKS_TABLE).update(update_data).eq("id", link_id).execute()
+        if res.data:
+            log_audit_action("affiliate_updated", "affiliate_links", link_id, update_data)
+            _broadcast({"type": "affiliate_updated", "id": link_id})
+            return jsonify({"success": True, "data": res.data[0]})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/affiliates/<link_id>", methods=["DELETE"])
+def api_delete_affiliate(link_id: str):
+    if sb is None:
+        return jsonify({"success": False, "error": "Supabase não configurado"}), 503
+    try:
+        sb.table(AFFILIATE_LINKS_TABLE).delete().eq("id", link_id).execute()
+        log_audit_action("affiliate_deleted", "affiliate_links", link_id)
+        _broadcast({"type": "affiliate_deleted", "id": link_id})
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ──────────────────────────────────────────────────────────────────────────────
