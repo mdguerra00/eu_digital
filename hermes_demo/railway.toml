@@ -1,0 +1,8 @@
+[build]
+dockerfilePath = "hermes_demo/Dockerfile"
+watchPatterns = ["hermes_demo/**"]
+
+[deploy]
+startCommand = "python app.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
