@@ -18,12 +18,13 @@ RUN pip install --upgrade pip && \
     pip install -e "."
 
 # Copiar nossos arquivos de configuração
-COPY config.yaml     /opt/hermes-config/config.yaml
-COPY SOUL.md         /opt/hermes-config/SOUL.md
-COPY skills/         /opt/hermes-config/skills/
-COPY cron/           /opt/hermes-config/cron/
-COPY daemon.py       /opt/hermes-config/daemon.py
-COPY start.sh        /start.sh
+# Paths relativos à raiz do repo (build context do Railway)
+COPY hermes_deploy/config.yaml     /opt/hermes-config/config.yaml
+COPY hermes_deploy/SOUL.md         /opt/hermes-config/SOUL.md
+COPY hermes_deploy/skills/         /opt/hermes-config/skills/
+COPY hermes_deploy/cron/           /opt/hermes-config/cron/
+COPY hermes_deploy/daemon.py       /opt/hermes-config/daemon.py
+COPY hermes_deploy/start.sh        /start.sh
 RUN chmod +x /start.sh
 
 # Hermes guarda tudo em HERMES_HOME (Railway pode montar volume aqui)
