@@ -8,10 +8,11 @@ mkdir -p "$HERMES_HOME/skills" "$HERMES_HOME/cron" "$HERMES_HOME/sessions" "$HER
 
 # ── Credenciais ──────────────────────────────────────────────────────────────
 cat > "$HERMES_HOME/.env" << EOF
-OPENAI_API_KEY=${OPENAI_API_KEY}
+OPENAI_API_KEY=${OPENAI_API_KEY:-}
 OPENAI_BASE_URL=${LLM_BASE_URL:-}
 LLM_BASE_URL=${LLM_BASE_URL:-}
-MODEL=${MODEL:-gpt-4.1-mini}
+ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+MODEL=${MODEL:-anthropic/claude-sonnet-4-20250514}
 SUPABASE_URL=${SUPABASE_URL:-}
 SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
 SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
