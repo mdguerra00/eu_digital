@@ -43,5 +43,5 @@ done
 echo "[HERMES] Setup concluído. Iniciando daemon autônomo..."
 echo "[HERMES] HERMES_HOME=$HERMES_HOME"
 
-# Rodar o daemon autônomo
-exec python /opt/hermes-config/daemon.py
+# Rodar o daemon autônomo (unbuffered para Railway ver os logs em tempo real)
+exec python -u /opt/hermes-config/daemon.py
