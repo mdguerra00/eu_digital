@@ -39,9 +39,10 @@ AGENT_STATE = {
     "activity_log": [],
 }
 
-# Skills carregadas do diretório hermes_deploy/skills
+# Skills carregadas do diretório hermes_deploy/skills (ou skills/ no container)
 SKILLS = {}
-SKILLS_DIR = Path(__file__).parent.parent / "hermes_deploy" / "skills"
+_base = Path(__file__).parent
+SKILLS_DIR = _base / "skills" if (_base / "skills").exists() else _base.parent / "hermes_deploy" / "skills"
 
 
 def _load_skills():
@@ -292,5 +293,6 @@ def api_architecture():
 if __name__ == "__main__":
     _log("Hermes Demo iniciado")
     _log(f"{len(SKILLS)} skills carregadas: {', '.join(SKILLS.keys())}")
-    print("\n  🔱 Hermes Demo — http://localhost:5050\n")
-    app.run(host="0.0.0.0", port=5050, debug=True)
+    port = int(os.environ.get("PORT", 5050))
+    print(f"\n  🔱 Hermes Demo — http://localhost:{port}\n")
+    app.run(host="0.0.0.0", port=port, debug=(port == 5050))
