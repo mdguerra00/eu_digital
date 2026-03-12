@@ -129,25 +129,15 @@ class CronScheduler:
         try:
             log.info(f"Executando: {cmd[0]} {cmd[1] if len(cmd) > 1 else ''} ...")
 
-            # Stream output to both stdout (Railway logs) AND file.
-            # Task text is sent via stdin (hermes chat is interactive).
-            stdin_text = getattr(self, "_pending_stdin", None)
+            # Stream output to both stdout (Railway logs) AND file
             with open(output_file, "w") as f:
                 proc = subprocess.Popen(
                     cmd,
-                    stdin=subprocess.PIPE if stdin_text else None,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
                     env={**os.environ},
                 )
-                # Send the task and close stdin so hermes processes it
-                if stdin_text:
-                    try:
-                        proc.stdin.write(stdin_text + "\n")
-                        proc.stdin.close()
-                    except BrokenPipeError:
-                        pass
                 output_lines = []
                 for line in proc.stdout:
                     sys.stdout.write(line)
@@ -171,27 +161,31 @@ class CronScheduler:
     def _build_command(self, task: str, model: str, max_iter: int) -> list:
         """Detecta o executável do hermes e monta o comando.
 
-        O CLI do hermes usa 'chat' (não 'run').
-        --yolo = modo não-interativo (sem confirmações) — flag global.
-        A task é passada via stdin (hermes chat é interativo).
-        O atributo _pending_stdin guarda o texto a enviar.
+        Sintaxe correta (do código-fonte hermes_cli/main.py):
+          hermes chat --yolo -q "task" [-m model]
+
+        Flags do subcomando 'chat':
+          -q / --query  : prompt único, modo não-interativo
+          --yolo        : pula confirmações de comandos perigosos
+          -m / --model  : modelo LLM a usar
         """
-        self._pending_stdin = task
-        base_args = ["--yolo", "chat"]
+        chat_args = ["chat", "--yolo", "-q", task]
+        if model:
+            chat_args += ["-m", model]
 
         # 1. hermes no PATH (pip install -e . cria o entry point)
         if shutil.which("hermes"):
-            return ["hermes"] + base_args
+            return ["hermes"] + chat_args
 
         # 2. python -m hermes (quando o entry point não está no PATH)
         hermes_src = Path("/opt/hermes")
         if (hermes_src / "hermes").is_dir() or (hermes_src / "hermes.py").exists():
-            return [sys.executable, "-m", "hermes"] + base_args
+            return [sys.executable, "-m", "hermes"] + chat_args
 
         # 3. script direto
         for candidate in [hermes_src / "main.py", hermes_src / "cli.py"]:
             if candidate.exists():
-                return [sys.executable, str(candidate)] + base_args
+                return [sys.executable, str(candidate)] + chat_args
 
         return []
 
