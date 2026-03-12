@@ -5,12 +5,12 @@ WORKDIR /app
 # Instalar dependencias
 RUN pip install flask
 
-# Copiar app e templates
-COPY app.py .
-COPY templates/ templates/
+# Copiar app e templates (paths relativos a raiz do repo)
+COPY hermes_demo/app.py .
+COPY hermes_demo/templates/ templates/
 
-# Copiar skills do hermes_deploy (lidas em runtime)
-COPY skills/ skills/
+# Copiar skills
+COPY hermes_demo/skills/ skills/
 
 EXPOSE 8080
 
