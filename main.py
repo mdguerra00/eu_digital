@@ -28,6 +28,7 @@ from blogger_tool_patch import _patch_tool_executor
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL")  # Ex: https://api.perplexity.ai
 
 # Validar que pelo menos OpenAI está configurado
 if not OPENAI_API_KEY:
@@ -99,7 +100,11 @@ else:
     print("[AVISO] Supabase não configurado. Usando fallback local (arquivo JSON).")
     sb = None
 
-oa = OpenAI(api_key=OPENAI_API_KEY)
+_oa_kwargs = {"api_key": OPENAI_API_KEY}
+if LLM_BASE_URL:
+    _oa_kwargs["base_url"] = LLM_BASE_URL
+    print(f"[INFO] LLM base_url customizado: {LLM_BASE_URL}")
+oa = OpenAI(**_oa_kwargs)
 
 # Inicializar módulos do agente
 wallet = FinancialWallet(wallet_file="agent_wallet.json")
@@ -1338,6 +1343,7 @@ def main_loop() -> None:
     log(f"TABLE={TABLE}")
     log(f"STATE_TABLE={STATE_TABLE}")
     log(f"MODEL={MODEL}")
+    log(f"LLM_BASE_URL={LLM_BASE_URL or '(default OpenAI)'}")
     log(f"AGENT_MODE={AGENT_MODE}")
     log(f"LOOP_INTERVAL_MINUTES={LOOP_INTERVAL_MINUTES}")
     log(f"MEMORY_WINDOW={MEMORY_WINDOW}")
