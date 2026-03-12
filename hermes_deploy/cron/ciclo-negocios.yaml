@@ -24,5 +24,6 @@ task: |
 target: "local"             # salva em ~/.hermes/cron/outputs/
 # target: "telegram"       # descomente e configure TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID
 
-model: "gpt-4.1-mini"
+# model vem da env var MODEL (default: gpt-4.1-mini)
+# Para Perplexity, defina MODEL=sonar-pro no Railway
 max_iterations: 20

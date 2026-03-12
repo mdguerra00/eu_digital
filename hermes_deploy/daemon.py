@@ -111,7 +111,7 @@ class CronScheduler:
 
     def _run_job(self, job: dict):
         task = job.get("task", "")
-        model = job.get("model", "gpt-4.1-mini")
+        model = os.environ.get("MODEL") or job.get("model", "gpt-4.1-mini")
         max_iter = job.get("max_iterations", 20)
 
         output_dir = Path(HERMES_HOME) / "cron" / "outputs"
@@ -126,22 +126,30 @@ class CronScheduler:
 
         try:
             log.info(f"Executando: {cmd[0]} {cmd[1] if len(cmd) > 1 else ''} ...")
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=3600,
-                env={**os.environ},
-            )
-            output = result.stdout + result.stderr
-            with open(output_file, "w") as f:
-                f.write(output)
 
-            if result.returncode == 0:
+            # Stream output to both stdout (Railway logs) AND file
+            with open(output_file, "w") as f:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env={**os.environ},
+                )
+                output_lines = []
+                for line in proc.stdout:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                    f.write(line)
+                    output_lines.append(line)
+                proc.wait(timeout=3600)
+
+            if proc.returncode == 0:
                 log.info(f"Job '{job['name']}' concluído → {output_file}")
             else:
-                log.error(f"Job '{job['name']}' falhou (code {result.returncode})")
-                log.error(output[-2000:])
+                log.error(f"Job '{job['name']}' falhou (code {proc.returncode})")
+                tail = "".join(output_lines[-50:])
+                log.error(tail[-2000:])
 
         except subprocess.TimeoutExpired:
             log.error(f"Job '{job['name']}' timeout após 1 hora")
