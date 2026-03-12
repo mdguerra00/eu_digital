@@ -2,8 +2,11 @@
 # Referência: cli-config.yaml.example do repo NousResearch/hermes-agent
 
 model:
-  default: "gpt-4.1-mini"          # mesmo modelo do eu_digital original
-  provider: "openai"                # usa OpenAI diretamente (não OpenRouter)
+  # Para usar Perplexity, defina no Railway:
+  #   OPENAI_API_KEY=pplx-xxx  LLM_BASE_URL=https://api.perplexity.ai  MODEL=sonar-pro
+  # Para OpenAI (padrão): basta OPENAI_API_KEY=sk-xxx
+  default: "${MODEL:-gpt-4.1-mini}"
+  provider: "openai"                # Perplexity é compatível via base_url
 
 execution:
   environment: "local"
