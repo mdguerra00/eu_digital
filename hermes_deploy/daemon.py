@@ -129,15 +129,25 @@ class CronScheduler:
         try:
             log.info(f"Executando: {cmd[0]} {cmd[1] if len(cmd) > 1 else ''} ...")
 
-            # Stream output to both stdout (Railway logs) AND file
+            # Stream output to both stdout (Railway logs) AND file.
+            # Task text is sent via stdin (hermes chat is interactive).
+            stdin_text = getattr(self, "_pending_stdin", None)
             with open(output_file, "w") as f:
                 proc = subprocess.Popen(
                     cmd,
+                    stdin=subprocess.PIPE if stdin_text else None,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
                     env={**os.environ},
                 )
+                # Send the task and close stdin so hermes processes it
+                if stdin_text:
+                    try:
+                        proc.stdin.write(stdin_text + "\n")
+                        proc.stdin.close()
+                    except BrokenPipeError:
+                        pass
                 output_lines = []
                 for line in proc.stdout:
                     sys.stdout.write(line)
@@ -162,10 +172,12 @@ class CronScheduler:
         """Detecta o executável do hermes e monta o comando.
 
         O CLI do hermes usa 'chat' (não 'run').
-        --yolo = modo não-interativo (sem confirmações).
-        A task é passada como argumento posicional para 'chat'.
+        --yolo = modo não-interativo (sem confirmações) — flag global.
+        A task é passada via stdin (hermes chat é interativo).
+        O atributo _pending_stdin guarda o texto a enviar.
         """
-        base_args = ["chat", "--yolo", task]
+        self._pending_stdin = task
+        base_args = ["--yolo", "chat"]
 
         # 1. hermes no PATH (pip install -e . cria o entry point)
         if shutil.which("hermes"):
