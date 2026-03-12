@@ -13,7 +13,9 @@ import signal
 import subprocess
 import sys
 import time
+import threading
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -189,8 +191,29 @@ class CronScheduler:
         log.info("Scheduler encerrado.")
 
 
+# ── Health check HTTP server (Railway exige porta aberta) ────────────────────
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, format, *args):
+        pass  # silencia logs de cada request
+
+
+def _start_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    log.info(f"Health check HTTP server na porta {port}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    _start_health_server()
     log.info("Hermes daemon iniciado.")
     log.info(f"HERMES_HOME = {HERMES_HOME}")
 

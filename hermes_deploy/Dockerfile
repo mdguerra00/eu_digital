@@ -30,6 +30,5 @@ RUN chmod +x /start.sh
 # Hermes guarda tudo em HERMES_HOME (Railway pode montar volume aqui)
 ENV HERMES_HOME=/data/hermes
 
-EXPOSE 8080
-
+# Railway injeta PORT dinamicamente; daemon.py escuta nessa porta
 CMD ["/start.sh"]
