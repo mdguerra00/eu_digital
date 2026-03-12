@@ -159,25 +159,27 @@ class CronScheduler:
             log.exception(f"Erro ao executar job '{job['name']}': {e}")
 
     def _build_command(self, task: str, model: str, max_iter: int) -> list:
-        """Detecta o executável do hermes e monta o comando."""
+        """Detecta o executável do hermes e monta o comando.
+
+        O CLI do hermes usa 'chat' (não 'run').
+        --yolo = modo não-interativo (sem confirmações).
+        A task é passada como argumento posicional para 'chat'.
+        """
+        base_args = ["chat", "--yolo", task]
+
         # 1. hermes no PATH (pip install -e . cria o entry point)
         if shutil.which("hermes"):
-            return ["hermes", "run", "--task", task, "--model", model,
-                    "--max-iterations", str(max_iter)]
+            return ["hermes"] + base_args
 
         # 2. python -m hermes (quando o entry point não está no PATH)
         hermes_src = Path("/opt/hermes")
         if (hermes_src / "hermes").is_dir() or (hermes_src / "hermes.py").exists():
-            return [sys.executable, "-m", "hermes", "run",
-                    "--task", task, "--model", model,
-                    "--max-iterations", str(max_iter)]
+            return [sys.executable, "-m", "hermes"] + base_args
 
         # 3. script direto
         for candidate in [hermes_src / "main.py", hermes_src / "cli.py"]:
             if candidate.exists():
-                return [sys.executable, str(candidate),
-                        "run", "--task", task, "--model", model,
-                        "--max-iterations", str(max_iter)]
+                return [sys.executable, str(candidate)] + base_args
 
         return []
 
