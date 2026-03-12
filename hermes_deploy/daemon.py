@@ -191,13 +191,105 @@ class CronScheduler:
         log.info("Scheduler encerrado.")
 
 
-# ── Health check HTTP server (Railway exige porta aberta) ────────────────────
-class _HealthHandler(BaseHTTPRequestHandler):
+# ── Referência global ao scheduler (para trigger manual via HTTP) ────────────
+_scheduler: CronScheduler | None = None
+
+# ── Painel web + health check (Railway exige porta aberta) ───────────────────
+_DASHBOARD_HTML = """\
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hermes Daemon</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0;
+         display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .card { background: #1e293b; border-radius: 12px; padding: 2rem; max-width: 420px;
+          width: 90%; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,.4); }
+  h1 { font-size: 1.4rem; margin-bottom: .5rem; }
+  .status { color: #94a3b8; font-size: .85rem; margin-bottom: 1.5rem; }
+  #go-btn { background: #22c55e; color: #fff; border: none; border-radius: 8px;
+            padding: 14px 48px; font-size: 1.1rem; font-weight: 600; cursor: pointer;
+            transition: background .2s; }
+  #go-btn:hover { background: #16a34a; }
+  #go-btn:disabled { background: #475569; cursor: wait; }
+  #result { margin-top: 1rem; font-size: .85rem; color: #94a3b8; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Hermes Daemon</h1>
+  <p class="status" id="status">Pronto</p>
+  <button id="go-btn" onclick="triggerRun()">GO</button>
+  <p id="result"></p>
+</div>
+<script>
+async function triggerRun() {
+  const btn = document.getElementById('go-btn');
+  const res = document.getElementById('result');
+  const st  = document.getElementById('status');
+  btn.disabled = true; btn.textContent = 'Executando...';
+  st.textContent = 'Job disparado — aguarde...';
+  res.textContent = '';
+  try {
+    const r = await fetch('/trigger', { method: 'POST' });
+    const j = await r.json();
+    st.textContent = j.status === 'ok' ? 'Concluído' : 'Erro';
+    res.textContent = j.message || '';
+  } catch(e) {
+    st.textContent = 'Erro de conexão';
+    res.textContent = e.toString();
+  }
+  btn.disabled = false; btn.textContent = 'GO';
+}
+</script>
+</body>
+</html>
+"""
+
+
+class _DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        # Painel principal
         self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(b"ok")
+        self.wfile.write(_DASHBOARD_HTML.encode())
+
+    def do_POST(self):
+        if self.path != "/trigger":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        import json
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+
+        if _scheduler and _scheduler.jobs:
+            try:
+                log.info("[MANUAL] Trigger recebido via painel web")
+                for job in _scheduler.jobs:
+                    log.info(f"[MANUAL] Executando job: {job['name']}")
+                    _scheduler._run_job(job)
+                body = json.dumps({"status": "ok",
+                    "message": f"{len(_scheduler.jobs)} job(s) executado(s)"})
+            except Exception as e:
+                log.exception(f"[MANUAL] Erro: {e}")
+                body = json.dumps({"status": "error", "message": str(e)})
+        else:
+            body = json.dumps({"status": "error",
+                "message": "Nenhum job carregado no scheduler"})
+        self.wfile.write(body.encode())
 
     def log_message(self, format, *args):
         pass  # silencia logs de cada request
@@ -205,14 +297,15 @@ class _HealthHandler(BaseHTTPRequestHandler):
 
 def _start_health_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    server = HTTPServer(("0.0.0.0", port), _DashboardHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    log.info(f"Health check HTTP server na porta {port}")
+    log.info(f"Painel web na porta {port} (GET / = dashboard, POST /trigger = go)")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    global _scheduler
     _start_health_server()
     log.info("Hermes daemon iniciado.")
     log.info(f"HERMES_HOME = {HERMES_HOME}")
@@ -224,15 +317,15 @@ def main():
     if not croniter:
         log.warning("croniter não instalado — próximas execuções em intervalos fixos de 4h.")
 
-    scheduler = CronScheduler()
-    scheduler.start()
+    _scheduler = CronScheduler()
+    _scheduler.start()
     log.info("CronScheduler ativo — verificando jobs a cada 60s.")
 
     while _running:
-        scheduler.tick()
+        _scheduler.tick()
         time.sleep(60)
 
-    scheduler.stop()
+    _scheduler.stop()
     log.info("Daemon encerrado.")
 
 
