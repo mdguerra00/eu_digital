@@ -2,10 +2,10 @@
 # Referência: cli-config.yaml.example do repo NousResearch/hermes-agent
 
 model:
-  # OpenAI direto via provider "main" (usa OPENAI_API_KEY + OPENAI_BASE_URL).
+  # Provider "auto" detecta OPENAI_API_KEY e roteia automaticamente.
   # Sem proxy, sem intermediários.
   default: "${MODEL:-gpt-4.1-mini}"
-  provider: "main"
+  provider: "auto"
 
 execution:
   environment: "local"
