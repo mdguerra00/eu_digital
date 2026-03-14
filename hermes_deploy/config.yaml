@@ -2,11 +2,10 @@
 # Referência: cli-config.yaml.example do repo NousResearch/hermes-agent
 
 model:
-  # Para usar Perplexity, defina no Railway:
-  #   OPENAI_API_KEY=pplx-xxx  LLM_BASE_URL=https://api.perplexity.ai  MODEL=sonar-pro
-  # Para OpenAI (padrão): basta OPENAI_API_KEY=sk-xxx
-  default: "${MODEL:-gpt-4.1-mini}"
-  provider: "openai"                # Perplexity é compatível via base_url
+  # Claude via LiteLLM proxy (start.sh inicia proxy local que traduz
+  # OpenAI-format → Anthropic API). Hermes vê como "openai".
+  default: "${MODEL:-anthropic/claude-sonnet-4-20250514}"
+  provider: "openai"
 
 execution:
   environment: "local"
@@ -28,7 +27,7 @@ memory:
 
 context:
   compression: true                 # comprime contexto longo automaticamente
-  compression_model: "gpt-4.1-mini"
+  compression_model: "anthropic/claude-haiku-4-5-20251001"  # via litellm proxy
 
 agent:
   max_iterations: 20
