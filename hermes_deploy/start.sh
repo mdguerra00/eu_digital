@@ -10,6 +10,7 @@ mkdir -p "$HERMES_HOME/skills" "$HERMES_HOME/cron" "$HERMES_HOME/sessions" "$HER
 echo "[HERMES] Configurando provider OpenAI (modelo: ${MODEL:-gpt-4.1-mini})"
 cat > "$HERMES_HOME/.env" << EOF
 OPENAI_API_KEY=${OPENAI_API_KEY}
+OPENAI_BASE_URL=https://api.openai.com/v1
 MODEL=${MODEL:-gpt-4.1-mini}
 SUPABASE_URL=${SUPABASE_URL:-}
 SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
