@@ -9,7 +9,7 @@ model:
 
 execution:
   environment: "local"
-  max_iterations: 30
+  max_iterations: 3
 
 tools:
   enabled:
@@ -30,7 +30,7 @@ context:
   compression_model: "gpt-4.1-mini"  # modelo leve para compressão de contexto
 
 agent:
-  max_iterations: 20
+  max_iterations: 3
   reasoning_effort: "medium"
   soul_file: "SOUL.md"             # personalidade/identidade do agente
 
