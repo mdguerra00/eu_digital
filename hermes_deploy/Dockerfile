@@ -16,8 +16,7 @@ RUN pip install --upgrade pip && \
     pip install -e ".[all]" 2>/dev/null || \
     pip install openai python-dotenv httpx rich tenacity pyyaml requests \
                 jinja2 pydantic>=2.0 croniter fire prompt_toolkit && \
-    pip install -e "." && \
-    pip install "litellm[proxy]"
+    pip install -e "."
 
 # Copiar nossos arquivos de configuração
 # Paths relativos à raiz do repo (build context do Railway)
