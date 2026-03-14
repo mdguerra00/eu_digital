@@ -2,11 +2,10 @@
 # Referência: cli-config.yaml.example do repo NousResearch/hermes-agent
 
 model:
-  # Hermes suporta Anthropic diretamente (requer ANTHROPIC_API_KEY).
-  # Se ANTHROPIC_API_KEY não estiver definida, o LiteLLM proxy local
-  # (start.sh) traduz OpenAI-format → Anthropic; nesse caso use provider: "main".
-  default: "${MODEL:-claude-sonnet-4-20250514}"
-  provider: "anthropic"
+  # OpenAI direto via provider "main" (usa OPENAI_API_KEY + OPENAI_BASE_URL).
+  # Sem proxy, sem intermediários.
+  default: "${MODEL:-gpt-4.1-mini}"
+  provider: "main"
 
 execution:
   environment: "local"
@@ -28,7 +27,7 @@ memory:
 
 context:
   compression: true                 # comprime contexto longo automaticamente
-  compression_model: "claude-haiku-4-5-20251001"  # via provider anthropic direto
+  compression_model: "gpt-4.1-mini"  # modelo leve para compressão de contexto
 
 agent:
   max_iterations: 20
