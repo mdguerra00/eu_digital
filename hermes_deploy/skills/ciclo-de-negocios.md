@@ -17,10 +17,13 @@ No início de cada ciclo autônomo de 4 horas.
 - Verifique se há tarefas pendentes do ciclo anterior
 
 ### Passo 2 — Pesquisa de oportunidade
-Use `web_search` com queries focadas:
+Use a ferramenta `web_search` diretamente (NÃO execute código Python).
+Queries sugeridas:
 - `"produtos afiliados mais vendidos Hotmart [nicho] 2026"`
 - `"[nicho] alta comissão afiliados Brasil"`
 - `"tendências marketing digital Brasil [mês/ano]"`
+
+**IMPORTANTE:** Chame `web_search` como tool nativa. Nunca tente importar módulos Python para fazer buscas.
 
 ### Passo 3 — Análise e decisão
 - Compare 3-5 produtos/estratégias

@@ -19,6 +19,7 @@ tools:
     - browser                       # Steel Browser (Railway interno)
   disabled:
     - terminal                      # segurança: sem execução de shell
+    - code_execution                # evita que o LLM tente rodar Python ao invés de usar tools nativos
 
 memory:
   persistent: true
