@@ -27,6 +27,12 @@ EOF
 cp /opt/hermes-config/config.yaml "$HERMES_HOME/config.yaml"
 cp /opt/hermes-config/SOUL.md     "$HERMES_HOME/SOUL.md"
 
+# MEMORY.md: seed inicial se ainda não existe (preserva memória do agente)
+if [ ! -f "$HERMES_HOME/MEMORY.md" ]; then
+    cp /opt/hermes-config/MEMORY.md "$HERMES_HOME/MEMORY.md"
+    echo "[HERMES] MEMORY.md seed criado"
+fi
+
 # Skills: copia apenas se ainda não existe (preserva o que o agente criou)
 for skill_file in /opt/hermes-config/skills/*.md; do
     fname=$(basename "$skill_file")

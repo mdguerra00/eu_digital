@@ -22,6 +22,7 @@ RUN pip install --upgrade pip && \
 # Paths relativos à raiz do repo (build context do Railway)
 COPY hermes_deploy/config.yaml     /opt/hermes-config/config.yaml
 COPY hermes_deploy/SOUL.md         /opt/hermes-config/SOUL.md
+COPY hermes_deploy/MEMORY.md       /opt/hermes-config/MEMORY.md
 COPY hermes_deploy/skills/         /opt/hermes-config/skills/
 COPY hermes_deploy/cron/           /opt/hermes-config/cron/
 COPY hermes_deploy/daemon.py       /opt/hermes-config/daemon.py
