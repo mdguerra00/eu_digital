@@ -16,9 +16,9 @@ tools:
     - web                           # web_search, firecrawl
     - file                          # leitura/escrita de arquivos
     - memory                        # skills + MEMORY.md
+    - browser                       # Steel Browser (Railway interno)
   disabled:
     - terminal                      # segurança: sem execução de shell
-    - browser                       # habilite se quiser Steel Browser
 
 memory:
   persistent: true
